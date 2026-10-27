@@ -22,11 +22,16 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        // Données dans Documents\Factures AG (modifiable avec la variable FACTURES_AG_DATA, utile pour les essais).
+        // Données dans AppData\Local\Factures AG : dossier personnel que Windows Defender (« Accès contrôlé aux dossiers »)
+        // ne bloque jamais, contrairement à Documents ou au Bureau. Modifiable avec FACTURES_AG_DATA (essais).
         _dataDir = Environment.GetEnvironmentVariable("FACTURES_AG_DATA")
-                   ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Factures AG");
+                   ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Factures AG");
         _pdfDir = Path.Combine(_dataDir, "Factures");
-        Directory.CreateDirectory(_pdfDir);
+        try { Directory.CreateDirectory(_pdfDir); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            throw new UserException($"Impossible de créer le dossier des données :\n{_pdfDir}\n\nWindows bloque peut-être l'accès à ce dossier (protection « Accès contrôlé aux dossiers » de Windows Defender).\n\nDétail : {e.Message}");
+        }
         // Une copie de la base est faite dans Sauvegardes avant chaque changement de structure.
         _store = new Store(Path.Combine(_dataDir, "factures-ag.db"), Path.Combine(_dataDir, "Sauvegardes"));
         Closed += (_, _) => _store.Dispose();

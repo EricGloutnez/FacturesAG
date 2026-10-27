@@ -40,11 +40,15 @@ Le `.exe` doit se trouver dans un dossier où vous avez le droit d'écrire (Docu
 d'environnement `FACTURES_AG_NO_UPDATE=1`.
 
 Avant tout changement de structure de la base (migration), une copie est enregistrée dans
-`Documents\Factures AG\Sauvegardes\`.
+`%LOCALAPPDATA%\Factures AG\Sauvegardes\`.
 
 ## Données
 
-`Documents\Factures AG\` : `factures-ag.db` (SQLite) et `Factures\` (PDF). Pour sauvegarder, copiez ce dossier.
+`%LOCALAPPDATA%\Factures AG\` (soit `C:\Users\<vous>\AppData\Local\Factures AG`) : `factures-ag.db` (SQLite),
+`Factures\` (PDF) et `Sauvegardes\`. Pour sauvegarder, copiez ce dossier (bouton « Ouvrir le dossier » dans Réglages).
+
+Ce dossier est utilisé plutôt que Documents parce que la protection « Accès contrôlé aux dossiers » de Windows
+Defender bloque les programmes inconnus qui écrivent dans Documents ou sur le Bureau.
 La variable d'environnement `FACTURES_AG_DATA` permet d'utiliser un autre dossier (essais).
 
 ## Développement

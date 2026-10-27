@@ -24,7 +24,15 @@ public partial class App : Application
             return;
         }
 
-        var main = new MainWindow();
+        MainWindow main;
+        try { main = new MainWindow(); }
+        catch (Exception ex)
+        {
+            // Sans fenêtre principale, l'application ne doit pas rester ouverte en arrière-plan.
+            MessageBox.Show($"Factures AG ne peut pas démarrer.\n\n{ex.Message}", "Factures AG", MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown(1);
+            return;
+        }
         MainWindow = main;
         ShutdownMode = ShutdownMode.OnMainWindowClose;
         main.Show();
