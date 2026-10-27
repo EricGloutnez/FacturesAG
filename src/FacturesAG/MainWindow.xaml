@@ -1,0 +1,351 @@
+﻿<Window x:Class="FacturesAG.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Factures AG" Width="1180" Height="820" MinWidth="900" MinHeight="600"
+        Background="{StaticResource Bg}" WindowStartupLocation="CenterScreen">
+  <Window.Resources>
+    <BooleanToVisibilityConverter x:Key="Vis"/>
+  </Window.Resources>
+  <DockPanel>
+    <!-- Barre du haut -->
+    <Border DockPanel.Dock="Top" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="0,0,0,1" Padding="24,10">
+      <StackPanel Orientation="Horizontal">
+        <TextBlock Text="Factures AG" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource Accent}" VerticalAlignment="Center" Margin="0,0,32,0"/>
+        <TabControl x:Name="Tabs" BorderThickness="0" Background="Transparent" Padding="0" SelectionChanged="Tabs_SelectionChanged">
+          <TabItem Header="Facture en cours" x:Name="TabDraft"/>
+          <TabItem Header="Factures" x:Name="TabInvoices"/>
+          <TabItem Header="État des résultats" x:Name="TabReport"/>
+          <TabItem Header="Réglages" x:Name="TabSettings"/>
+        </TabControl>
+      </StackPanel>
+    </Border>
+
+    <!-- Message en bas -->
+    <Border x:Name="Toast" DockPanel.Dock="Bottom" Visibility="Collapsed" Background="{StaticResource Text}" Padding="16,10">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Content="✕" Style="{StaticResource IconBtn}" Foreground="White" Click="CloseToast_Click"/>
+        <TextBlock x:Name="ToastText" Foreground="White" VerticalAlignment="Center" TextWrapping="Wrap"/>
+      </DockPanel>
+    </Border>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+      <Grid MaxWidth="1100" Margin="24">
+
+        <!-- ===== Facture en cours ===== -->
+        <StackPanel x:Name="ViewDraft">
+          <DockPanel Margin="0,0,0,16">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Bottom">
+              <Button Content="Coller depuis ag-connect" Click="OpenPaste_Click" Margin="0,0,8,0"/>
+              <Button Content="+ Assemblée" Click="AddLine_Click"/>
+            </StackPanel>
+            <StackPanel>
+              <TextBlock Style="{StaticResource Help}"><Run Text="Facture en cours · "/><Run x:Name="ClientNameRun"/></TextBlock>
+              <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="DraftTitle" Style="{StaticResource H1}"/>
+                <Border Style="{StaticResource Badge}" Background="{StaticResource WarnBg}" Margin="10,4,0,0">
+                  <TextBlock Text="Brouillon" FontSize="12" Foreground="{StaticResource Warn}" FontWeight="SemiBold"/>
+                </Border>
+              </StackPanel>
+            </StackPanel>
+          </DockPanel>
+
+          <!-- Coller depuis ag-connect -->
+          <Border x:Name="PastePanel" Style="{StaticResource Card}" Visibility="Collapsed">
+            <StackPanel>
+              <TextBlock Text="Coller la page « Mes invitations »" Style="{StaticResource H2}"/>
+              <TextBlock Style="{StaticResource Help}" Margin="0,0,0,10"
+                         Text="Dans ag-connect, ouvrez Mes invitations, faites Ctrl+A puis Ctrl+C, et collez ici (Ctrl+V)."/>
+              <TextBox x:Name="PasteText" Height="120" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"/>
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                <Button Content="Annuler" Style="{StaticResource Ghost}" Click="ClosePaste_Click" Margin="0,0,8,0"/>
+                <Button Content="Lire les assemblées" Click="ReadPaste_Click"/>
+              </StackPanel>
+              <ItemsControl x:Name="PasteList" Margin="0,12,0,0">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,0" Padding="4,8">
+                      <DockPanel>
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding Reason}" Style="{StaticResource Help}" VerticalAlignment="Center"/>
+                        <CheckBox IsChecked="{Binding Selected}" IsEnabled="{Binding CanAdd}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <StackPanel>
+                          <TextBlock Text="{Binding Title}" FontWeight="SemiBold"/>
+                          <TextBlock Text="{Binding When}" Style="{StaticResource Help}"/>
+                        </StackPanel>
+                      </DockPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <Button x:Name="PasteAddBtn" Content="Ajouter la sélection" Style="{StaticResource Primary}" HorizontalAlignment="Right"
+                      Margin="0,12,0,0" Visibility="Collapsed" Click="AddPaste_Click"/>
+            </StackPanel>
+          </Border>
+
+          <!-- Lignes -->
+          <Border Style="{StaticResource Card}" Padding="0">
+            <StackPanel Grid.IsSharedSizeScope="True">
+              <Grid Margin="12,10,12,8">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/><ColumnDefinition Width="140"/><ColumnDefinition Width="90"/>
+                  <ColumnDefinition Width="90"/><ColumnDefinition Width="70"/><ColumnDefinition Width="170"/><ColumnDefinition Width="40"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Entité juridique" Style="{StaticResource ColHead}"/>
+                <TextBlock Grid.Column="1" Text="Date" Style="{StaticResource ColHead}"/>
+                <TextBlock Grid.Column="2" Text="Début" Style="{StaticResource ColHead}"/>
+                <TextBlock Grid.Column="3" Text="Fin" Style="{StaticResource ColHead}"/>
+                <TextBlock Grid.Column="4" Text="Quorum" Style="{StaticResource ColHead}" HorizontalAlignment="Center"/>
+                <TextBlock Grid.Column="5" Text="Montant" Style="{StaticResource ColHead}" HorizontalAlignment="Right"/>
+              </Grid>
+              <ItemsControl x:Name="LinesList" KeyboardNavigation.TabNavigation="Continue">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,0" Padding="12,6">
+                      <Grid>
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*"/><ColumnDefinition Width="140"/><ColumnDefinition Width="90"/>
+                          <ColumnDefinition Width="90"/><ColumnDefinition Width="70"/><ColumnDefinition Width="170"/><ColumnDefinition Width="40"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,8,0">
+                          <TextBox Style="{StaticResource CellBox}" Text="{Binding Entity, UpdateSourceTrigger=LostFocus}"/>
+                          <TextBlock Text="{Binding Detail}" Style="{StaticResource Help}" Margin="7,0,0,0"/>
+                        </StackPanel>
+                        <DatePicker Grid.Column="1" SelectedDate="{Binding Date}" VerticalAlignment="Center" Margin="0,0,8,0" BorderThickness="0"/>
+                        <TextBox Grid.Column="2" Style="{StaticResource CellBox}" Text="{Binding Start, UpdateSourceTrigger=LostFocus}" VerticalAlignment="Center" Margin="0,0,8,0" ToolTip="Ex. : 18:30, 18h30 ou 1830"/>
+                        <TextBox Grid.Column="3" Text="{Binding End, UpdateSourceTrigger=LostFocus}" VerticalAlignment="Center" Margin="0,0,8,0" ToolTip="Ex. : 20:34, 20h34 ou 2034">
+                          <TextBox.Style>
+                            <Style TargetType="TextBox" BasedOn="{StaticResource CellBox}">
+                              <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsMissing}" Value="True">
+                                  <Setter Property="Background" Value="{StaticResource WarnBg}"/>
+                                  <Setter Property="BorderBrush" Value="#E0B25A"/>
+                                </DataTrigger>
+                              </Style.Triggers>
+                            </Style>
+                          </TextBox.Style>
+                        </TextBox>
+                        <CheckBox Grid.Column="4" IsChecked="{Binding Quorum}" HorizontalAlignment="Center" VerticalAlignment="Center" ToolTip="Quorum atteint"/>
+                        <StackPanel Grid.Column="5" VerticalAlignment="Center">
+                          <Grid HorizontalAlignment="Right" Width="110">
+                            <TextBlock Text="{Binding Placeholder}" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,8,0"
+                                       Visibility="{Binding ShowPlaceholder, Converter={StaticResource Vis}}" IsHitTestVisible="False"/>
+                            <TextBox Style="{StaticResource CellBox}" Text="{Binding OverrideText, UpdateSourceTrigger=LostFocus}" TextAlignment="Right" FontWeight="SemiBold"
+                                     ToolTip="Laissez vide pour le calcul automatique ; tapez un montant pour le forcer."/>
+                          </Grid>
+                          <TextBlock Text="{Binding ForcedNote}" FontSize="11" Foreground="{StaticResource Warn}" HorizontalAlignment="Right"
+                                     Visibility="{Binding IsForced, Converter={StaticResource Vis}}"/>
+                        </StackPanel>
+                        <Button Grid.Column="6" Content="✕" Style="{StaticResource IconBtn}" ToolTip="Retirer cette assemblée" Click="DeleteLine_Click" Tag="{Binding}"/>
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <StackPanel x:Name="DraftEmpty" Margin="20,36" HorizontalAlignment="Center">
+                <TextBlock Text="Commencez la facture du mois" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                <TextBlock Text="Collez vos assemblées depuis ag-connect ou ajoutez-en une à la main." Style="{StaticResource Help}" HorizontalAlignment="Center"/>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <DockPanel Margin="4,0,4,12">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+              <TextBlock Text="Total" Foreground="{StaticResource Muted}" VerticalAlignment="Bottom" Margin="0,0,12,4"/>
+              <TextBlock x:Name="DraftTotal" FontSize="26" FontWeight="SemiBold"/>
+            </StackPanel>
+            <TextBlock x:Name="RateHelp" Style="{StaticResource Help}" VerticalAlignment="Center"/>
+          </DockPanel>
+          <Border x:Name="DraftWarning" Background="{StaticResource WarnBg}" CornerRadius="8" Padding="12,8" Margin="0,0,0,12" Visibility="Collapsed">
+            <TextBlock x:Name="DraftWarningText" Foreground="{StaticResource Warn}"/>
+          </Border>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Aperçu PDF" Style="{StaticResource Ghost}" Click="PreviewDraft_Click" Margin="0,0,12,0" VerticalAlignment="Bottom"/>
+            <StackPanel Margin="0,0,12,0">
+              <TextBlock Text="Date de facture" Style="{StaticResource FieldLabel}"/>
+              <DatePicker x:Name="FinalizeDate" Width="160"/>
+            </StackPanel>
+            <Button x:Name="FinalizeBtn" Style="{StaticResource Primary}" Click="Finalize_Click" VerticalAlignment="Bottom"/>
+          </StackPanel>
+        </StackPanel>
+
+        <!-- ===== Factures ===== -->
+        <StackPanel x:Name="ViewInvoices" Visibility="Collapsed">
+          <DockPanel Margin="0,0,0,16">
+            <Button DockPanel.Dock="Right" Content="Ouvrir le dossier des PDF" Click="OpenPdfFolder_Click"/>
+            <TextBlock Text="Factures" Style="{StaticResource H1}"/>
+          </DockPanel>
+          <Border Style="{StaticResource Card}" Padding="0">
+            <StackPanel>
+              <DataGrid x:Name="InvoicesGrid">
+                <DataGrid.Columns>
+                  <DataGridTemplateColumn Header="N°" Width="110">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate>
+                        <StackPanel Orientation="Horizontal">
+                          <TextBlock Text="{Binding Number}" FontWeight="SemiBold"/>
+                          <TextBlock Text="{Binding Source}" Style="{StaticResource Help}" Margin="8,0,0,0"/>
+                        </StackPanel>
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                  </DataGridTemplateColumn>
+                  <DataGridTextColumn Header="Date" Binding="{Binding Date}" Width="160"/>
+                  <DataGridTextColumn Header="Total" Binding="{Binding Total}" Width="110">
+                    <DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="HorizontalAlignment" Value="Right"/></Style></DataGridTextColumn.ElementStyle>
+                  </DataGridTextColumn>
+                  <DataGridTemplateColumn Header="Statut" Width="*">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate>
+                        <StackPanel Orientation="Horizontal">
+                          <Border Padding="8,1" CornerRadius="10">
+                            <Border.Style>
+                              <Style TargetType="Border">
+                                <Setter Property="Background" Value="{StaticResource WarnBg}"/>
+                                <Style.Triggers><DataTrigger Binding="{Binding IsPaid}" Value="True"><Setter Property="Background" Value="{StaticResource OkBg}"/></DataTrigger></Style.Triggers>
+                              </Style>
+                            </Border.Style>
+                            <TextBlock Text="{Binding Status}" FontSize="12" FontWeight="SemiBold"/>
+                          </Border>
+                          <TextBlock Text="{Binding PaidInfo}" Style="{StaticResource Help}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                  </DataGridTemplateColumn>
+                  <DataGridTemplateColumn Header="" Width="340">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                          <Button Content="{Binding PdfLabel}" Style="{StaticResource Ghost}" Click="InvoicePdf_Click" Tag="{Binding}" Padding="10,4"/>
+                          <Button Content="{Binding PaidLabel}" Click="InvoicePaid_Click" Tag="{Binding}" Padding="10,4" Margin="6,0,0,0"/>
+                        </StackPanel>
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                  </DataGridTemplateColumn>
+                </DataGrid.Columns>
+              </DataGrid>
+              <TextBlock x:Name="InvoicesEmpty" Text="Aucune facture finalisée pour l'instant." Style="{StaticResource Help}" HorizontalAlignment="Center" Margin="20,36"/>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <!-- ===== État des résultats ===== -->
+        <StackPanel x:Name="ViewReport" Visibility="Collapsed">
+          <DockPanel Margin="0,0,0,16">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+              <ComboBox x:Name="ReportYear" Width="100" SelectionChanged="ReportYear_SelectionChanged" VerticalContentAlignment="Center" Padding="8,5"/>
+            </StackPanel>
+            <TextBlock Text="État des résultats" Style="{StaticResource H1}"/>
+          </DockPanel>
+          <UniformGrid Columns="3" Margin="0,0,0,16">
+            <Border Style="{StaticResource Card}" Margin="0,0,12,0" Padding="16">
+              <StackPanel><TextBlock Text="Revenus de l'année" Style="{StaticResource Help}"/><TextBlock x:Name="ReportTotal" FontSize="24" FontWeight="SemiBold"/></StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}" Margin="0,0,12,0" Padding="16">
+              <StackPanel><TextBlock Text="Dépenses" Style="{StaticResource Help}"/><TextBlock Text="0.00 $" FontSize="24" FontWeight="SemiBold"/></StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}" Margin="0" Padding="16">
+              <StackPanel><TextBlock Text="Reste à encaisser" Style="{StaticResource Help}"/><TextBlock x:Name="ReportUnpaid" FontSize="24" FontWeight="SemiBold"/></StackPanel>
+            </Border>
+          </UniformGrid>
+          <Border Style="{StaticResource Card}" Padding="0">
+            <DataGrid x:Name="ReportGrid">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="Catégorie" Binding="{Binding Category}" Width="*">
+                  <DataGridTextColumn.ElementStyle>
+                    <Style TargetType="TextBlock"><Style.Triggers><DataTrigger Binding="{Binding IsTotal}" Value="True"><Setter Property="FontWeight" Value="SemiBold"/></DataTrigger></Style.Triggers></Style>
+                  </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Part" Binding="{Binding Share}" Width="100">
+                  <DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="HorizontalAlignment" Value="Right"/></Style></DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Montant (hors taxes)" Binding="{Binding Total}" Width="180">
+                  <DataGridTextColumn.ElementStyle>
+                    <Style TargetType="TextBlock">
+                      <Setter Property="HorizontalAlignment" Value="Right"/>
+                      <Style.Triggers><DataTrigger Binding="{Binding IsTotal}" Value="True"><Setter Property="FontWeight" Value="SemiBold"/></DataTrigger></Style.Triggers>
+                    </Style>
+                  </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+              </DataGrid.Columns>
+            </DataGrid>
+          </Border>
+        </StackPanel>
+
+        <!-- ===== Réglages ===== -->
+        <StackPanel x:Name="ViewSettings" Visibility="Collapsed">
+          <TextBlock Text="Réglages" Style="{StaticResource H1}" Margin="0,0,0,16"/>
+          <Border Style="{StaticResource Card}">
+            <StackPanel x:Name="SettingsForm">
+              <TextBlock Text="Vos coordonnées" Style="{StaticResource H2}"/>
+              <WrapPanel>
+                <StackPanel Style="{StaticResource Field}" Width="320"><TextBlock Text="Nom" Style="{StaticResource FieldLabel}"/><TextBox Tag="issuer_name"/></StackPanel>
+                <StackPanel Style="{StaticResource Field}" Width="320"><TextBlock Text="Téléphone" Style="{StaticResource FieldLabel}"/><TextBox Tag="issuer_phone"/></StackPanel>
+                <StackPanel Style="{StaticResource Field}" Width="320"><TextBlock Text="Courriel" Style="{StaticResource FieldLabel}"/><TextBox Tag="issuer_email"/></StackPanel>
+                <StackPanel Style="{StaticResource Field}" Width="320"><TextBlock Text="Adresse" Style="{StaticResource FieldLabel}"/><TextBox Tag="issuer_street"/></StackPanel>
+                <StackPanel Style="{StaticResource Field}" Width="320"><TextBlock Text="Ville, province, code postal" Style="{StaticResource FieldLabel}"/><TextBox Tag="issuer_city"/></StackPanel>
+              </WrapPanel>
+              <TextBlock Text="Client" Style="{StaticResource H2}" Margin="0,12,0,8"/>
+              <WrapPanel>
+                <StackPanel Style="{StaticResource Field}" Width="320"><TextBlock Text="Nom" Style="{StaticResource FieldLabel}"/><TextBox Tag="client_name"/></StackPanel>
+                <StackPanel Style="{StaticResource Field}" Width="320"><TextBlock Text="Courriel" Style="{StaticResource FieldLabel}"/><TextBox Tag="client_email"/></StackPanel>
+                <StackPanel Style="{StaticResource Field}" Width="320"><TextBlock Text="Adresse" Style="{StaticResource FieldLabel}"/><TextBox Tag="client_street"/></StackPanel>
+                <StackPanel Style="{StaticResource Field}" Width="320"><TextBlock Text="Ville, province, code postal" Style="{StaticResource FieldLabel}"/><TextBox Tag="client_city"/></StackPanel>
+              </WrapPanel>
+              <TextBlock Text="Facture" Style="{StaticResource H2}" Margin="0,12,0,8"/>
+              <StackPanel Style="{StaticResource Field}"><TextBlock Text="Conditions de paiement" Style="{StaticResource FieldLabel}"/><TextBox Tag="payment_terms" TextWrapping="Wrap" AcceptsReturn="True" Height="56" VerticalContentAlignment="Top"/></StackPanel>
+              <WrapPanel>
+                <StackPanel Style="{StaticResource Field}" Width="320"><TextBlock Text="Message de bas de page" Style="{StaticResource FieldLabel}"/><TextBox Tag="footer"/></StackPanel>
+                <StackPanel Style="{StaticResource Field}" Width="200"><TextBlock Text="Prochain numéro de facture" Style="{StaticResource FieldLabel}"/><TextBox Tag="next_number"/></StackPanel>
+              </WrapPanel>
+              <Button Content="Enregistrer" Style="{StaticResource Primary}" HorizontalAlignment="Right" Click="SaveSettings_Click"/>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Text="Grille de tarifs · Assemblée virtuelle" Style="{StaticResource H2}"/>
+              <TextBlock Style="{StaticResource Help}" Margin="0,0,0,8" Text="Chaque assemblée est facturée au taux en vigueur à sa date. Toute heure commencée est due. Les factures déjà finalisées ne changent jamais."/>
+              <ItemsControl x:Name="RatesList">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border BorderBrush="{StaticResource Border}" BorderThickness="0,0,0,1" Padding="4,6">
+                      <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="140"/><ColumnDefinition Width="100"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
+                        <TextBlock><Run Text="En vigueur depuis le "/><Run Text="{Binding From, Mode=OneWay}"/></TextBlock>
+                        <TextBlock Grid.Column="1" Text="{Binding Hourly}" HorizontalAlignment="Right"/>
+                        <TextBlock Grid.Column="2" HorizontalAlignment="Right"><Run Text="min. "/><Run Text="{Binding Min, Mode=OneWay}"/></TextBlock>
+                        <Button Grid.Column="3" Content="✕" Style="{StaticResource IconBtn}" ToolTip="Supprimer ce taux" Click="DeleteRate_Click" Tag="{Binding}"/>
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <WrapPanel Margin="0,12,0,0">
+                <StackPanel Style="{StaticResource Field}"><TextBlock Text="Depuis le" Style="{StaticResource FieldLabel}"/><DatePicker x:Name="RateFrom" Width="150"/></StackPanel>
+                <StackPanel Style="{StaticResource Field}"><TextBlock Text="Taux ($/h)" Style="{StaticResource FieldLabel}"/><TextBox x:Name="RateHourly" Width="100"/></StackPanel>
+                <StackPanel Style="{StaticResource Field}"><TextBlock Text="Minimum (h)" Style="{StaticResource FieldLabel}"/><TextBox x:Name="RateMin" Width="100" Text="2"/></StackPanel>
+                <Button Content="Ajouter un taux" VerticalAlignment="Bottom" Margin="0,0,0,12" Click="AddRate_Click"/>
+              </WrapPanel>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Text="Importer l'historique de Finance D" Style="{StaticResource H2}"/>
+              <TextBlock Style="{StaticResource Help}" Margin="0,0,0,10"
+                         Text="Choisissez le fichier exporté de Finance D (Options → Mon dossier → Exporter mes enregistrements au format JSON). Les factures déjà présentes sont ignorées."/>
+              <Button Content="Choisir le fichier JSON…" HorizontalAlignment="Left" Click="ImportFinanceD_Click"/>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Text="Vos données" Style="{StaticResource H2}"/>
+              <TextBlock Style="{StaticResource Help}" Margin="0,0,0,10" Text="Base de données et PDF des factures. Pour faire une sauvegarde, copiez ce dossier."/>
+              <TextBlock x:Name="DataPath" FontFamily="Consolas" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,10"/>
+              <Button Content="Ouvrir le dossier" HorizontalAlignment="Left" Click="OpenDataFolder_Click"/>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </Grid>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

@@ -1,0 +1,276 @@
+﻿// Tests de FacturesAG.Core, sans dépendance : dotnet run --project tests/FacturesAG.Tests
+// Toutes les données (noms, adresses, taux) sont fictives.
+using FacturesAG.Core;
+
+var rates = new List<Rate>
+{
+    new(1, Store.CategorieVirtuelle, "2024-01-01", 25m, 2m),
+    new(2, Store.CategorieVirtuelle, "2025-01-01", 30m, 2m),
+};
+
+// Base en mémoire avec la même grille et un numéro de départ à 120.
+Store Fresh()
+{
+    var s = new Store(":memory:");
+    foreach (var r in rates) s.AddRate(r.EffectiveFrom, r.HourlyRate, r.MinHours);
+    s.UpdateSettings(new Dictionary<string, string> { ["next_number"] = "120", ["client_name"] = "Client Test" });
+    return s;
+}
+
+var tests = new List<(string Name, Action Body)>
+{
+    ("durée simple et passage de minuit", () =>
+    {
+        Eq(124, Billing.DurationMinutes("18:30", "20:34"));
+        Eq(415, Billing.DurationMinutes("18:30", "01:25"));
+        Eq(0, Billing.DurationMinutes("18:30", "18:30"));
+    }),
+    ("heures facturées : toute heure commencée, minimum 2 h", () =>
+    {
+        Eq(2m, Billing.BilledHours(56, 2)); Eq(3m, Billing.BilledHours(124, 2));
+        Eq(4m, Billing.BilledHours(240, 2)); Eq(5m, Billing.BilledHours(241, 2));
+    }),
+    ("taux en vigueur selon la date", () =>
+    {
+        Eq(25m, Billing.RateFor("2024-12-31", rates)!.HourlyRate);
+        Eq(30m, Billing.RateFor("2025-01-01", rates)!.HourlyRate);
+        Eq<Rate?>(null, Billing.RateFor("2023-12-31", rates));
+    }),
+    ("montants à 30 $/h selon la durée", () =>
+    {
+        foreach (var (s, e, expected) in new[] { ("18:30", "20:34", 90m), ("17:30", "19:40", 90m), ("18:30", "20:58", 90m),
+                                                 ("18:30", "21:27", 90m), ("18:00", "18:56", 60m), ("18:30", "22:30", 120m) })
+            Eq<decimal?>(expected, Billing.ComputeAmount("2026-07-15", s, e, true, rates), $"{s}-{e}");
+    }),
+    ("ancien taux (25 $/h) et passage de minuit (30 $/h)", () =>
+    {
+        Eq<decimal?>(125m, Billing.ComputeAmount("2024-06-20", "18:30", "22:32", true, rates));
+        Eq<decimal?>(210m, Billing.ComputeAmount("2025-09-20", "18:30", "01:25", true, rates));
+    }),
+    ("pas de quorum = minimum ; heure de fin manquante = pas de montant", () =>
+    {
+        Eq<decimal?>(60m, Billing.ComputeAmount("2026-07-15", "18:30", "", false, rates));
+        Eq<decimal?>(null, Billing.ComputeAmount("2026-07-15", "18:30", "", true, rates));
+    }),
+    ("saisie souple des heures", () =>
+    {
+        Eq("20:34", Billing.NormalizeTime("20:34")); Eq("20:34", Billing.NormalizeTime("20h34"));
+        Eq("20:34", Billing.NormalizeTime("2034")); Eq("08:34", Billing.NormalizeTime("834"));
+        Eq("01:25", Billing.NormalizeTime("1h25")); Eq("20:00", Billing.NormalizeTime("20h"));
+        Eq("09:00", Billing.NormalizeTime("9")); Eq("", Billing.NormalizeTime(" "));
+        Eq(null, Billing.NormalizeTime("25:00")); Eq(null, Billing.NormalizeTime("20:75")); Eq(null, Billing.NormalizeTime("abc"));
+    }),
+    ("description de ligne", () =>
+    {
+        Eq("9h00", Billing.FormatHour("09:00"));
+        Eq("SDC Les Jardins (18h30 - 20h34)", Billing.DescribeLine("SDC Les Jardins", "18:30", "20:34", true));
+        Eq("SDC Le Phare - Quorum non atteint", Billing.DescribeLine("SDC Le Phare", "18:30", "", false));
+    }),
+    ("ag-connect : entité, date, heure et mode", () =>
+    {
+        var r = AgConnectParser.Parse(Sample.Invitations);
+        Eq(4, r.Count);
+        Eq(new AgConnectItem("SDC Les Jardins", "2026-10-27", "18:30", "100 rue Principale, Laval", false, "Ouverture"), r[0]);
+        Eq(new AgConnectItem("SDC Le Phare Tour Est", "2026-10-05", "18:30", "", true, "Clôturée"), r[1]);
+        Eq("Association des copropriétaires du Domaine des Érables Phase 1", r[2].Entity);
+        Eq("2026-08-01", r[3].Date); Eq("09:00", r[3].Start);
+    }),
+    ("ag-connect : texte vide, fins de ligne Windows", () =>
+    {
+        Eq(0, AgConnectParser.Parse("").Count);
+        Eq(0, AgConnectParser.Parse("Tableau de bord\nRien ici").Count);
+        var r = AgConnectParser.Parse(Sample.Invitations.Replace("\n", "  \r\n"));
+        Eq(4, r.Count); Eq("SDC Le Phare Tour Est", r[1].Entity);
+    }),
+    ("base neuve : aucun taux, aucune coordonnée, numéro 1", () =>
+    {
+        using var s = new Store(":memory:");
+        Eq(0, s.ListRates().Count);
+        Eq("", s.GetSettings()["issuer_name"]);
+        Eq("1", s.GetSettings()["next_number"]);
+    }),
+    ("facture en cours : montants et total", () =>
+    {
+        using var s = Fresh();
+        var a = s.AddLine("SDC Les Jardins", "2026-11-03", "18:30", "20:34");
+        s.AddLine("SDC Le Phare", "2026-11-04", "18:30", quorum: false);
+        var d = s.GetDraft();
+        Eq(2, d.Lines.Count);
+        Eq<decimal?>(90m, d.Lines.Single(l => l.Id == a).Amount);
+        Eq("SDC Les Jardins (18h30 - 20h34)", d.Lines.Single(l => l.Id == a).Description);
+        Eq(150m, d.Total); Eq(0, d.Incomplete);
+    }),
+    ("heures saisies librement puis normalisées, heure invalide refusée", () =>
+    {
+        using var s = Fresh();
+        var id = s.AddLine("SDC A", "2026-11-03", "18h30");
+        s.UpdateLine(id, end: "2034");
+        var l = s.GetDraft().Lines[0];
+        Eq("18:30", l.Start); Eq("20:34", l.End); Eq<decimal?>(90m, l.Amount);
+        Throws<UserException>(() => s.UpdateLine(id, end: "25:00"), "Heure de fin invalide");
+    }),
+    ("montant forcé à la main", () =>
+    {
+        using var s = Fresh();
+        var id = s.AddLine("SDC Bord-du-Lac", "2026-11-03", "09:00", "12:35");
+        Eq<decimal?>(120m, s.GetDraft().Lines[0].Amount);
+        s.UpdateLine(id, overrideAmount: 180m);
+        Eq<decimal?>(180m, s.GetDraft().Lines[0].Amount);
+        s.UpdateLine(id, clearOverride: true);
+        Eq<decimal?>(120m, s.GetDraft().Lines[0].Amount);
+    }),
+    ("impossible de finaliser avec une heure de fin manquante", () =>
+    {
+        using var s = Fresh();
+        s.AddLine("SDC A", "2026-11-03", "18:30");
+        Throws<UserException>(() => s.Finalize("2026-11-30"), "sans heure de fin");
+    }),
+    ("finaliser : numéro, montants figés, nouvelle facture en cours vide", () =>
+    {
+        using var s = Fresh();
+        s.AddLine("SDC A", "2026-11-03", "18:30", "21:00");
+        var id = s.Finalize("2026-11-30");
+        var inv = s.GetInvoice(id);
+        Eq(120, inv.Invoice.Number); Eq(InvoiceStatus.Final, inv.Invoice.Status); Eq(90m, inv.Invoice.Total);
+        Eq("121", s.GetSettings()["next_number"]);
+        Eq(0, s.GetDraft().Lines.Count);
+        True(s.GetDraft().Id != id);
+        Throws<UserException>(() => s.UpdateLine(inv.Lines[0].Id, end: "23:00"), "finalisée");
+        s.AddRate("2026-01-01", 40m, 2m);
+        Eq<decimal?>(90m, s.GetInvoice(id).Lines[0].Amount);
+    }),
+    ("ag-connect : ignore doublons et assemblées avec adresse", () =>
+    {
+        using var s = Fresh();
+        var items = new[]
+        {
+            new AgConnectItem("SDC A", "2026-11-03", "18:30", "", true, ""),
+            new AgConnectItem("SDC B", "2026-11-04", "19:00", "1 rue X", false, ""),
+        };
+        Eq(1, s.AddFromAgConnect(items).Added.Count);
+        var again = s.AddFromAgConnect(items);
+        Eq(0, again.Added.Count); Eq(2, again.Skipped.Count);
+    }),
+    ("payée / non payée et état des résultats", () =>
+    {
+        using var s = Fresh();
+        s.AddLine("SDC A", "2026-11-03", "18:30", "21:00");
+        var id = s.Finalize("2026-11-30");
+        Eq(90m, s.GetReport(2026).Unpaid);
+        s.MarkPaid(id, "2026-12-05", "Virement Interac");
+        var r = s.GetReport(2026);
+        Eq(90m, r.Total); Eq(0m, r.Unpaid);
+        Eq(Store.CategorieVirtuelle, r.Categories.Single().Category);
+        s.MarkUnpaid(id);
+        Eq(90m, s.GetReport(2026).Unpaid);
+    }),
+    ("import d'un export JSON de Finance D", () =>
+    {
+        using var s = new Store(":memory:");
+        Eq(new ImportResult(2, 0), s.ImportFinanceD(Sample.FinanceD));
+        Eq(new ImportResult(0, 2), s.ImportFinanceD(Sample.FinanceD));
+        var r = s.GetReport(2026);
+        Eq(163.65m, r.Total); Eq(60m, r.Unpaid);
+        Eq("20", s.GetSettings()["next_number"]);
+        Throws<UserException>(() => s.ImportFinanceD("{\"foo\":1}"), "Finance D");
+        Throws<UserException>(() => s.ImportFinanceD("pas du json"), "JSON");
+    }),
+    ("réglages : numéro invalide refusé", () =>
+    {
+        using var s = Fresh();
+        Throws<UserException>(() => s.UpdateSettings(new Dictionary<string, string> { ["next_number"] = "12a" }), "nombre entier");
+        s.UpdateSettings(new Dictionary<string, string> { ["client_name"] = "Client X", ["inconnu"] = "ignoré" });
+        Eq("Client X", s.GetSettings()["client_name"]);
+        False(s.GetSettings().ContainsKey("inconnu"));
+    }),
+    ("facture PDF générée, nom de fichier avec ou sans client", () =>
+    {
+        using var s = Fresh();
+        s.AddLine("SDC A", "2026-11-03", "18:30", "21:00");
+        var inv = s.GetInvoice(s.Finalize("2026-11-30"));
+        var pdf = InvoicePdf.Generate(inv, s.GetSettings());
+        True(pdf.Length > 1000 && pdf[0] == '%' && pdf[1] == 'P' && pdf[2] == 'D' && pdf[3] == 'F', "en-tête %PDF");
+        Eq("Facture-120_Client-Test.pdf", InvoicePdf.FileName(inv, s.GetSettings()));
+        s.UpdateSettings(new Dictionary<string, string> { ["client_name"] = "" });
+        Eq("Facture-120.pdf", InvoicePdf.FileName(inv, s.GetSettings()));
+    }),
+};
+
+int passed = 0, failed = 0;
+foreach (var (name, body) in tests)
+{
+    try { body(); passed++; Console.WriteLine($"✔ {name}"); }
+    catch (Exception e) { failed++; Console.WriteLine($"✖ {name}\n    {e.Message}"); }
+}
+Console.WriteLine($"\n{passed} réussi(s), {failed} échec(s)");
+return failed == 0 ? 0 : 1;
+
+static void Eq<T>(T expected, T actual, string? what = null)
+{
+    if (!EqualityComparer<T>.Default.Equals(expected, actual))
+        throw new Exception($"{what} attendu : {expected?.ToString() ?? "null"} — obtenu : {actual?.ToString() ?? "null"}");
+}
+static void True(bool cond, string what = "condition") { if (!cond) throw new Exception($"{what} fausse"); }
+static void False(bool cond) => True(!cond);
+static void Throws<TEx>(Action a, string contains) where TEx : Exception
+{
+    try { a(); }
+    catch (TEx e) when (e.Message.Contains(contains)) { return; }
+    catch (Exception e) { throw new Exception($"exception inattendue : {e.GetType().Name} {e.Message}"); }
+    throw new Exception($"aucune exception (attendu : « {contains} »)");
+}
+
+static class Sample
+{
+    // Texte au format de la page « Mes invitations » d'ag-connect (données fictives).
+    public const string Invitations = """
+        Tableau de bord
+        Mes invitations
+        5 éléments
+        Octobre 2026
+        3
+        Ouverture
+        SDC Les Jardins
+        Assemblée Générale Annuelle / Annual General Meeting
+        Organisateur A
+        27 octobre 2026 à 18:30 (heure de Montreal)
+        100 rue Principale, Laval -
+        334 participants
+        Voir l'assemblée
+        Clôturée
+        SDC Le Phare Tour Est
+        Assemblée Générale Annuelle
+        Organisateur B
+        05 octobre 2026 à 18:30 (heure de Montreal)
+        -
+        133 participants
+        Voir l'assemblée
+        Septembre 2026
+        Clôturée
+        Association des copropriétaires du Domaine des Érables Phase 1
+        Assemblée Générale Annuelle
+        organisateur@example.com
+        29 septembre 2026 à 18:30 (heure de Montreal)
+        -
+        129 participants
+        Voir l'assemblée
+        Convoquée
+        SDC Août
+        Assemblée Générale Spéciale
+        Organisateur C
+        1 août 2026 à 9:00 (heure de Montreal)
+        -
+        12 participants
+        Voir l'assemblée
+        """;
+
+    public const string FinanceD = """
+        { "data": { "facturesRevenus": {
+          "a": { "numero": "18", "date": { "num": "20260730" }, "solde": 0, "transactions": [
+            { "montant": "90.00", "total": "90.00", "categorie": "Assemblée Virtuelle", "description": "SDC Les Jardins (18h30 - 20h34)" },
+            { "montant": "13.65", "total": "13.65", "categorie": "Kilométrage", "description": "19.5 KM aller" } ] },
+          "b": { "numero": "19", "date": { "num": "20260805" }, "solde": 60, "transactions": [
+            { "montant": "60.00", "total": "60.00", "categorie": "Formation", "description": "Formation" } ] }
+        } } }
+        """;
+}

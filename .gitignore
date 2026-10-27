@@ -1,0 +1,6 @@
+bin/
+obj/
+publish/
+donnees-test*/
+*.user
+.vs/

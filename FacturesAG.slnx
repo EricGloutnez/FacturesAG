@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FacturesAG.Core/FacturesAG.Core.csproj" />
+    <Project Path="src/FacturesAG/FacturesAG.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FacturesAG.Tests/FacturesAG.Tests.csproj" />
+  </Folder>
+</Solution>
