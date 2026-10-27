@@ -30,13 +30,62 @@ public sealed class Store : IDisposable
         ["next_number"] = "1",
     };
 
-    private readonly SqliteConnection _db;
+    /// <summary>
+    /// Évolutions successives de la structure de la base. Chaque version n'est appliquée qu'une fois
+    /// (numéro gardé dans PRAGMA user_version). Ne jamais modifier une entrée publiée : en ajouter une nouvelle.
+    /// </summary>
+    public static readonly IReadOnlyList<Migration> Migrations =
+    [
+        new(1, """
+            CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS rates (
+              id INTEGER PRIMARY KEY, category TEXT NOT NULL, effective_from TEXT NOT NULL,
+              hourly_cents INTEGER NOT NULL, min_hours REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS invoices (
+              id INTEGER PRIMARY KEY, number INTEGER UNIQUE,
+              status TEXT NOT NULL CHECK (status IN ('draft','final','paid')),
+              invoice_date TEXT, finalized_at TEXT, paid_at TEXT, payment_method TEXT,
+              total_cents INTEGER, source TEXT NOT NULL DEFAULT 'app');
+            CREATE TABLE IF NOT EXISTS lines (
+              id INTEGER PRIMARY KEY, invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+              category TEXT NOT NULL, entity TEXT, date TEXT, start TEXT, end_time TEXT,
+              quorum INTEGER NOT NULL DEFAULT 1, override_cents INTEGER, amount_cents INTEGER, description TEXT);
+            """),
+    ];
 
-    public Store(string file)
+    private readonly SqliteConnection _db;
+    private readonly string? _backupDir;
+
+    /// <param name="file">Fichier SQLite (ou ":memory:").</param>
+    /// <param name="backupDir">Dossier des sauvegardes faites avant chaque migration ; null pour ne pas sauvegarder.</param>
+    /// <param name="migrations">Liste de migrations à utiliser (par défaut <see cref="Migrations"/> ; sert aux tests).</param>
+    public Store(string file, string? backupDir = null, IReadOnlyList<Migration>? migrations = null)
     {
+        _backupDir = backupDir;
         _db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = file, ForeignKeys = true }.ToString());
         _db.Open();
-        Migrate();
+        try { Migrate(migrations ?? Migrations); }
+        catch
+        {
+            // Ne pas laisser le fichier verrouillé si la base ne peut pas être ouverte.
+            _db.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Version de structure de la base ouverte.</summary>
+    public int SchemaVersion => (int)(long)Scalar("PRAGMA user_version")!;
+
+    /// <summary>Copie complète et cohérente de la base dans le dossier des sauvegardes. Retourne le chemin, ou null.</summary>
+    public string? Backup(string reason)
+    {
+        if (_backupDir is null) return null;
+        Directory.CreateDirectory(_backupDir);
+        var file = Path.Combine(_backupDir, $"factures-ag-{DateTime.Now:yyyyMMdd-HHmmss}-{reason}.db");
+        using var dest = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = file, Pooling = false }.ToString());
+        dest.Open();
+        _db.BackupDatabase(dest);
+        return file;
     }
 
     public void Dispose() => _db.Dispose();
@@ -84,24 +133,32 @@ public sealed class Store : IDisposable
     private static string CheckTime(string? value, string label) =>
         Billing.NormalizeTime(value) ?? throw new UserException($"{label} invalide : écrivez par exemple 20:34, 20h34 ou 2034.");
 
-    private void Migrate()
+    // Journal classique (pas WAL) : un seul fichier, plus sûr si le dossier est synchronisé par OneDrive.
+    private void Migrate(IReadOnlyList<Migration> migrations)
     {
-        // Journal classique (pas WAL) : un seul fichier, plus sûr si le dossier est synchronisé par OneDrive.
-        Exec("""
-            CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS rates (
-              id INTEGER PRIMARY KEY, category TEXT NOT NULL, effective_from TEXT NOT NULL,
-              hourly_cents INTEGER NOT NULL, min_hours REAL NOT NULL);
-            CREATE TABLE IF NOT EXISTS invoices (
-              id INTEGER PRIMARY KEY, number INTEGER UNIQUE,
-              status TEXT NOT NULL CHECK (status IN ('draft','final','paid')),
-              invoice_date TEXT, finalized_at TEXT, paid_at TEXT, payment_method TEXT,
-              total_cents INTEGER, source TEXT NOT NULL DEFAULT 'app');
-            CREATE TABLE IF NOT EXISTS lines (
-              id INTEGER PRIMARY KEY, invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
-              category TEXT NOT NULL, entity TEXT, date TEXT, start TEXT, end_time TEXT,
-              quorum INTEGER NOT NULL DEFAULT 1, override_cents INTEGER, amount_cents INTEGER, description TEXT);
-            """);
+        var target = migrations.Count == 0 ? 0 : migrations.Max(m => m.Version);
+        var current = SchemaVersion;
+        // Base créée par la version 0.1.0 (sans numéro) : ses tables correspondent à la version 1.
+        if (current == 0 && Scalar("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'invoices'") is not null)
+        {
+            Exec("PRAGMA user_version = 1");
+            current = 1;
+        }
+        if (current > target)
+            throw new UserException($"Ces données ont été créées par une version plus récente de Factures AG (structure {current}). Mettez l'application à jour.");
+
+        var pending = migrations.Where(m => m.Version > current).OrderBy(m => m.Version).ToList();
+        // Sauvegarde avant de toucher à une base existante.
+        if (pending.Count > 0 && current > 0) Backup($"avant-structure-{pending[^1].Version}");
+        foreach (var m in pending)
+        {
+            InTransaction(() =>
+            {
+                Exec(m.Sql);
+                Exec($"PRAGMA user_version = {m.Version.ToString(CultureInfo.InvariantCulture)}");
+                return 0;
+            });
+        }
         foreach (var (k, v) in DefaultSettings) Exec("INSERT OR IGNORE INTO settings (key, value) VALUES ($1, $2)", k, v);
     }
 

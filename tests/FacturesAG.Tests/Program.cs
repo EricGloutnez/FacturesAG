@@ -194,7 +194,128 @@ var tests = new List<(string Name, Action Body)>
         s.UpdateSettings(new Dictionary<string, string> { ["client_name"] = "" });
         Eq("Facture-120.pdf", InvoicePdf.FileName(inv, s.GetSettings()));
     }),
+
+    // ---------- Migrations de la base ----------
+    ("base neuve : structure à jour", () =>
+    {
+        using var s = new Store(":memory:");
+        Eq(Store.Migrations.Max(m => m.Version), s.SchemaVersion);
+    }),
+    ("base de la version 0.1.0 (sans numéro) reconnue, données intactes, pas de sauvegarde inutile", () =>
+    {
+        var dir = Directory.CreateTempSubdirectory("fag-test-");
+        try
+        {
+            var file = Path.Combine(dir.FullName, "v010.db");
+            CreateV010Database(file);
+            var backups = Path.Combine(dir.FullName, "Sauvegardes");
+            using (var s = new Store(file, backups))
+            {
+                Eq(1, s.SchemaVersion);
+                Eq(1, s.ListInvoices().Count);
+                Eq(90m, s.ListInvoices()[0].Total);
+            }
+            False(Directory.Exists(backups) && Directory.EnumerateFiles(backups).Any());
+        }
+        finally { ClearPools(); dir.Delete(true); }
+    }),
+    ("nouvelle structure : sauvegarde avant migration, données conservées", () =>
+    {
+        var dir = Directory.CreateTempSubdirectory("fag-test-");
+        try
+        {
+            var file = Path.Combine(dir.FullName, "base.db");
+            var backups = Path.Combine(dir.FullName, "Sauvegardes");
+            CreateV010Database(file);
+            var withV2 = Store.Migrations.Append(new Migration(2, "ALTER TABLE lines ADD COLUMN km REAL;")).ToList();
+            using (var s = new Store(file, backups, withV2))
+            {
+                Eq(2, s.SchemaVersion);
+                Eq(90m, s.ListInvoices()[0].Total);
+            }
+            var saved = Directory.GetFiles(backups);
+            Eq(1, saved.Length);
+            True(saved[0].EndsWith("-avant-structure-2.db"), "nom de la sauvegarde");
+            using (var copy = new Store(saved[0])) { Eq(1, copy.SchemaVersion); Eq(1, copy.ListInvoices().Count); }
+            // Une version plus ancienne de l'application refuse d'ouvrir une base plus récente.
+            Throws<UserException>(() => new Store(file).Dispose(), "plus récente");
+        }
+        finally { ClearPools(); dir.Delete(true); }
+    }),
+
+    // ---------- Mises à jour ----------
+    ("numéro de version lu dans l'étiquette", () =>
+    {
+        Eq(new Version(0, 2, 0), Updater.ParseTag("v0.2.0"));
+        Eq(new Version(1, 0, 0), Updater.ParseTag("1.0"));
+        Eq(new Version(0, 3, 1), Updater.ParseTag("v0.3.1-beta"));
+        Eq<Version?>(null, Updater.ParseTag("latest"));
+    }),
+    ("mise à jour détectée seulement si plus récente, avec le .exe et son empreinte", () =>
+    {
+        var v010 = new Version(0, 1, 0);
+        var u = Updater.FindUpdate(Sample.Release("v0.2.0"), v010)!;
+        Eq(new Version(0, 2, 0), u.Version);
+        Eq("FacturesAG-0.2.0-win-x64.exe", u.AssetName);
+        Eq(new string('a', 64), u.Sha256);
+        Eq<UpdateInfo?>(null, Updater.FindUpdate(Sample.Release("v0.1.0"), v010));
+        Eq<UpdateInfo?>(null, Updater.FindUpdate(Sample.Release("v0.2.0"), new Version(0, 2, 0, 0)));
+        Eq<UpdateInfo?>(null, Updater.FindUpdate(Sample.Release("v0.2.0", digest: null), v010));
+        Eq<UpdateInfo?>(null, Updater.FindUpdate(Sample.Release("v0.2.0", asset: "autre.zip"), v010));
+        Eq<UpdateInfo?>(null, Updater.FindUpdate(Sample.Release("v0.2.0", prerelease: true), v010));
+        Eq<UpdateInfo?>(null, Updater.FindUpdate(Sample.Release("v0.2.0", url: "https://exemple.com/x.exe"), v010));
+    }),
+    ("téléchargement vérifié : empreinte correcte acceptée, altérée refusée et supprimée", () =>
+    {
+        var dir = Directory.CreateTempSubdirectory("fag-test-");
+        try
+        {
+            var file = Path.Combine(dir.FullName, "new.exe");
+            File.WriteAllText(file, "contenu");
+            var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData("contenu"u8));
+            var ok = new UpdateInfo(new Version(0, 2, 0), "v0.2.0", "a", "https://github.com/x", hash, 7);
+            Updater.VerifyFile(file, ok);
+            True(File.Exists(file), "fichier conservé");
+            Throws<UserException>(() => Updater.VerifyFile(file, ok with { Sha256 = new string('0', 64) }), "altéré");
+            False(File.Exists(file));
+        }
+        finally { dir.Delete(true); }
+    }),
+    ("remplacement du .exe puis nettoyage de l'ancien", () =>
+    {
+        var dir = Directory.CreateTempSubdirectory("fag-test-");
+        try
+        {
+            var current = Path.Combine(dir.FullName, "Factures AG.exe");
+            var update = Path.Combine(dir.FullName, "telechargement.exe");
+            File.WriteAllText(current, "ancien");
+            File.WriteAllText(update, "nouveau");
+            Updater.Swap(current, update);
+            Eq("nouveau", File.ReadAllText(current));
+            Eq("ancien", File.ReadAllText(current + ".old"));
+            False(File.Exists(update));
+            Updater.CleanupOld(current);
+            False(File.Exists(current + ".old"));
+        }
+        finally { dir.Delete(true); }
+    }),
 };
+
+// Base telle que créée par la version 0.1.0 : tables de la structure 1, sans numéro de version, une facture.
+static void CreateV010Database(string file)
+{
+    using var c = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={file};Pooling=False");
+    c.Open();
+    using var cmd = c.CreateCommand();
+    cmd.CommandText = Store.Migrations[0].Sql + """
+        INSERT INTO invoices (id, number, status, invoice_date, total_cents) VALUES (1, 7, 'final', '2026-01-31', 9000);
+        INSERT INTO lines (invoice_id, category, entity, date, amount_cents, description) VALUES (1, 'Assemblée Virtuelle', 'SDC A', '2026-01-10', 9000, 'SDC A');
+        """;
+    cmd.ExecuteNonQuery();
+}
+
+// Libère les fichiers SQLite pour pouvoir supprimer les dossiers temporaires.
+static void ClearPools() => Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
 
 int passed = 0, failed = 0;
 foreach (var (name, body) in tests)
@@ -222,6 +343,19 @@ static void Throws<TEx>(Action a, string contains) where TEx : Exception
 
 static class Sample
 {
+    // Réponse de l'API GitHub « releases/latest », réduite aux champs utilisés.
+    public static string Release(string tag, string? digest = "sha256:" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        string asset = "FacturesAG-0.2.0-win-x64.exe", bool prerelease = false, string? url = null) =>
+        System.Text.Json.JsonSerializer.Serialize(new
+        {
+            tag_name = tag, draft = false, prerelease,
+            assets = new[]
+            {
+                new { name = asset, size = 1234L, digest,
+                      browser_download_url = url ?? $"https://github.com/EricGloutnez/FacturesAG/releases/download/{tag}/{asset}" },
+            },
+        });
+
     // Texte au format de la page « Mes invitations » d'ag-connect (données fictives).
     public const string Invitations = """
         Tableau de bord

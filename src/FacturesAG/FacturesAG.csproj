@@ -12,7 +12,8 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>Factures AG</AssemblyName>
     <Product>Factures AG</Product>
-    <Version>0.1.0</Version>
+    <!-- Remplacée à la publication par le numéro de l'étiquette (ex. v0.2.0) -->
+    <Version>0.2.0</Version>
     <!-- Publication : un seul .exe autonome, sans installation de .NET -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>

@@ -32,5 +32,8 @@ public sealed record PasteResult(IReadOnlyList<AgConnectItem> Added, IReadOnlyLi
 
 public sealed record ImportResult(int Imported, int Skipped);
 
+/// <summary>Évolution de la structure de la base : SQL appliqué une seule fois pour atteindre <paramref name="Version"/>.</summary>
+public sealed record Migration(int Version, string Sql);
+
 /// <summary>Erreur destinée à être montrée telle quelle à l'utilisateur.</summary>
 public sealed class UserException(string message) : Exception(message);

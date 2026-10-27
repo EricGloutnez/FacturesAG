@@ -339,9 +339,10 @@
           <Border Style="{StaticResource Card}">
             <StackPanel>
               <TextBlock Text="Vos données" Style="{StaticResource H2}"/>
-              <TextBlock Style="{StaticResource Help}" Margin="0,0,0,10" Text="Base de données et PDF des factures. Pour faire une sauvegarde, copiez ce dossier."/>
+              <TextBlock Style="{StaticResource Help}" Margin="0,0,0,10" Text="Base de données, PDF des factures et sauvegardes automatiques (faites avant chaque mise à jour de la structure des données). Pour une sauvegarde complète, copiez ce dossier."/>
               <TextBlock x:Name="DataPath" FontFamily="Consolas" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,10"/>
               <Button Content="Ouvrir le dossier" HorizontalAlignment="Left" Click="OpenDataFolder_Click"/>
+              <TextBlock x:Name="VersionText" Style="{StaticResource Help}" Margin="0,14,0,0"/>
             </StackPanel>
           </Border>
         </StackPanel>

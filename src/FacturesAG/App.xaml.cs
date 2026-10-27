@@ -1,11 +1,10 @@
 ﻿using System.Windows;
-using System.Windows.Threading;
 
 namespace FacturesAG;
 
 public partial class App : Application
 {
-    protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
         // Toute erreur imprévue est affichée plutôt que de fermer l'application sans prévenir.
         DispatcherUnhandledException += (_, args) =>
@@ -14,5 +13,20 @@ public partial class App : Application
             args.Handled = true;
         };
         base.OnStartup(e);
+
+        // Mise à jour obligatoire avant d'ouvrir l'application.
+        ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        UpdateFlow.CleanupPreviousVersion();
+        if (await UpdateFlow.CheckQuietlyAsync(TimeSpan.FromSeconds(8)) is { } update)
+        {
+            UpdateFlow.InstallAndRestart(update, null);
+            Shutdown(); // redémarrage lancé, ou « Quitter » après un échec
+            return;
+        }
+
+        var main = new MainWindow();
+        MainWindow = main;
+        ShutdownMode = ShutdownMode.OnMainWindowClose;
+        main.Show();
     }
 }

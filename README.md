@@ -28,6 +28,20 @@ Taux horaire en vigueur à la date de l'assemblée × heures commencées, avec u
 Les factures finalisées ne changent jamais, même si la grille est modifiée ensuite.
 Pour l'instant, les assemblées hybrides (avec adresse) sont ignorées lors du collage.
 
+## Mises à jour (automatiques et obligatoires)
+
+Au démarrage, puis toutes les 4 heures si l'application reste ouverte, Factures AG consulte la dernière version
+publiée sur GitHub. Si elle est plus récente, elle est téléchargée, vérifiée (taille et empreinte SHA-256 fournie par
+GitHub), installée à la place du `.exe`, puis l'application redémarre. Il n'est pas possible de la reporter : en cas
+d'échec, seuls « Réessayer » et « Quitter » sont proposés. Sans Internet, l'application s'ouvre normalement.
+
+Le `.exe` doit se trouver dans un dossier où vous avez le droit d'écrire (Documents, Bureau…), pas dans
+`Program Files`. Les mises à jour sont désactivées dans les versions de développement (Debug) ou avec la variable
+d'environnement `FACTURES_AG_NO_UPDATE=1`.
+
+Avant tout changement de structure de la base (migration), une copie est enregistrée dans
+`Documents\Factures AG\Sauvegardes\`.
+
 ## Données
 
 `Documents\Factures AG\` : `factures-ag.db` (SQLite) et `Factures\` (PDF). Pour sauvegarder, copiez ce dossier.
@@ -41,9 +55,24 @@ dotnet run --project tests/FacturesAG.Tests           # tests (sans dépendance)
 dotnet publish src/FacturesAG -c Release -o publish   # produit publish/Factures AG.exe
 ```
 
-- `src/FacturesAG.Core` : règles de calcul (`Billing`), lecture d'ag-connect (`AgConnectParser`), stockage (`Store`),
-  facture PDF (`InvoicePdf`).
-- `src/FacturesAG` : interface WPF.
+- `src/FacturesAG.Core` : règles de calcul (`Billing`), lecture d'ag-connect (`AgConnectParser`), stockage et
+  migrations (`Store`), facture PDF (`InvoicePdf`), mises à jour (`Updater`).
+- `src/FacturesAG` : interface WPF (`UpdateFlow` pour la mise à jour obligatoire).
+
+### Publier une version
+
+```
+git tag -a v0.3.0 -m "Notes de version (affichées sur GitHub)"
+git push origin v0.3.0
+```
+
+Le flux GitHub Actions `.github/workflows/publier.yml` lance les tests, compile le `.exe` avec ce numéro et crée la
+version GitHub ; toutes les applications installées s'y mettent à jour. Si un test échoue, rien n'est publié.
+
+### Changer la structure de la base
+
+Ajouter une entrée à la fin de `Store.Migrations` (numéro suivant, SQL à appliquer). Ne jamais modifier une
+migration déjà publiée.
 - `tests/FacturesAG.Tests` : tests (données fictives).
 
 ## Licences des dépendances

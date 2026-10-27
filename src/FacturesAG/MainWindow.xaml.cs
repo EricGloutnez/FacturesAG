@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Threading;
 using FacturesAG.Core;
 using Microsoft.Win32;
@@ -26,13 +27,31 @@ public partial class MainWindow : Window
                    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Factures AG");
         _pdfDir = Path.Combine(_dataDir, "Factures");
         Directory.CreateDirectory(_pdfDir);
-        _store = new Store(Path.Combine(_dataDir, "factures-ag.db"));
+        // Une copie de la base est faite dans Sauvegardes avant chaque changement de structure.
+        _store = new Store(Path.Combine(_dataDir, "factures-ag.db"), Path.Combine(_dataDir, "Sauvegardes"));
         Closed += (_, _) => _store.Dispose();
 
         LinesList.ItemsSource = _lines;
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
         DataPath.Text = _dataDir;
+        VersionText.Text = $"Version {UpdateFlow.CurrentVersion} · mises à jour automatiques et obligatoires";
         LoadDraft();
+
+        // Si l'application reste ouverte longtemps, une nouvelle version est quand même installée.
+        _updateTimer.Tick += async (_, _) => await CheckForUpdateWhileRunningAsync();
+        _updateTimer.Start();
+    }
+
+    private readonly DispatcherTimer _updateTimer = new() { Interval = TimeSpan.FromHours(4) };
+
+    private async Task CheckForUpdateWhileRunningAsync()
+    {
+        if (await UpdateFlow.CheckQuietlyAsync(TimeSpan.FromSeconds(30)) is not { } update) return;
+        _updateTimer.Stop();
+        // Enregistre la saisie en cours (les champs s'enregistrent en quittant la case).
+        if (Keyboard.FocusedElement is TextBox box) box.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        UpdateFlow.InstallAndRestart(update, this);
+        Application.Current.Shutdown(); // redémarrage lancé, ou « Quitter » après un échec
     }
 
     // ---------- Outils ----------

@@ -1,0 +1,47 @@
+# Publie une nouvelle version quand une étiquette « vX.Y.Z » est poussée :
+# tests, compilation du .exe au bon numéro, puis version GitHub (que les applications installées téléchargent).
+# Si un test échoue, rien n'est publié.
+name: Publier une version
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  publier:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Numéro de version
+        id: v
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Tests
+        run: dotnet run --project tests/FacturesAG.Tests -c Release
+
+      - name: Compiler le .exe
+        shell: bash
+        run: |
+          dotnet publish src/FacturesAG -c Release -o publish -p:Version=${{ steps.v.outputs.version }}
+          mv "publish/Factures AG.exe" "publish/FacturesAG-${{ steps.v.outputs.version }}-win-x64.exe"
+
+      # Créée en brouillon, puis rendue publique une fois le .exe téléversé :
+      # les applications ne voient jamais une version sans son fichier.
+      - name: Créer la version GitHub
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "Factures AG $V" --notes-from-tag
+          gh release upload "$GITHUB_REF_NAME" "publish/FacturesAG-$V-win-x64.exe#Factures AG pour Windows 64 bits (.exe)"
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
