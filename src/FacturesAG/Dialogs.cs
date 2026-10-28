@@ -59,6 +59,35 @@ public static class Dialogs
         return win.ShowDialog() == true ? (entity.Text.Trim(), date.SelectedDate!.Value, start.Text) : null;
     }
 
+    /// <summary>Ligne libre : catégorie, description, montant et date.</summary>
+    public static (string Category, string Description, decimal Amount, DateTime Date)? FreeLine(Window owner, IEnumerable<string> categories)
+    {
+        var (win, body) = Frame(owner, "Ajouter une ligne libre");
+        var category = new ComboBox { IsEditable = true, ItemsSource = categories.ToList(), Text = "Formation", Width = 340, Padding = new Thickness(6, 5, 6, 5) };
+        var description = new TextBox { Width = 340 };
+        var amount = new TextBox { Width = 120, HorizontalAlignment = HorizontalAlignment.Left };
+        var date = new DatePicker { SelectedDate = DateTime.Today };
+        body.Children.Add(Field("Catégorie (choisissez ou tapez-en une nouvelle)", category));
+        body.Children.Add(Field("Description (ex. : 1,5 heure de formation)", description));
+        body.Children.Add(Field("Montant ($)", amount));
+        body.Children.Add(Field("Date", date));
+        var error = new TextBlock { Foreground = (System.Windows.Media.Brush)Application.Current.Resources["Danger"], Margin = new Thickness(0, 0, 0, 8) };
+        body.Children.Add(error);
+        decimal value = 0;
+        Buttons(win, body, "Ajouter", () =>
+        {
+            var t = amount.Text.Trim().Replace(',', '.').Replace("$", "").Replace(" ", "");
+            if (string.IsNullOrWhiteSpace(category.Text)) { error.Text = "Choisissez une catégorie."; return false; }
+            if (string.IsNullOrWhiteSpace(description.Text)) { error.Text = "Entrez une description."; return false; }
+            if (!decimal.TryParse(t, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out value) || value < 0)
+            { error.Text = "Entrez un montant valide, par exemple 60 ou 60.00."; return false; }
+            if (date.SelectedDate is null) { error.Text = "Choisissez une date."; return false; }
+            return true;
+        });
+        win.Loaded += (_, _) => description.Focus();
+        return win.ShowDialog() == true ? (category.Text.Trim(), description.Text.Trim(), value, date.SelectedDate!.Value) : null;
+    }
+
     /// <summary>Paiement reçu : date et mode.</summary>
     public static (DateTime Date, string Method)? Payment(Window owner, string invoiceLabel)
     {

@@ -7,7 +7,8 @@ livrée en un seul fichier `Factures AG.exe`, sans installation.
 ## Premier lancement
 
 Dans **Réglages** :
-1. Entrez vos coordonnées, celles du client et le prochain numéro de facture.
+1. Entrez vos coordonnées, celles du client, le délai de paiement par défaut, le prochain numéro de facture
+   et, si vous voulez, votre logo (PNG ou JPEG).
 2. Ajoutez votre taux horaire dans la **grille de tarifs** (date d'entrée en vigueur, taux, minimum d'heures).
 3. Facultatif : importez votre historique depuis Finance D (export JSON : Options → Mon dossier →
    Exporter mes enregistrements au format JSON). Le prochain numéro est ajusté automatiquement.
@@ -17,8 +18,14 @@ Dans **Réglages** :
 1. **Facture en cours** : « Coller depuis ag-connect » (page *Mes invitations*, Ctrl+A puis Ctrl+C), ou « + Assemblée ».
    Saisissez l'heure de fin (`20:34`, `20h34` ou `2034`) ; le montant se calcule seul. Décochez *Quorum* si le quorum
    n'est pas atteint (minimum facturé). Tapez un montant pour le forcer, effacez-le pour revenir au calcul.
-2. **Finaliser** : la facture reçoit son numéro, ses montants sont figés et le PDF est enregistré.
-3. **Factures** : ouvrir le PDF, marquer payée (date et mode de paiement).
+   « + Ligne libre » ajoute une ligne à montant fixe (formation, per diem, kilométrage…).
+2. **Finaliser** : choisissez la date et le délai de paiement (Net 0, Net 15 ou Net 30) ; la facture reçoit son numéro,
+   ses montants sont figés et le PDF est enregistré (avec votre logo et la date d'échéance).
+3. **Factures** : ouvrir le PDF, marquer payée (date et mode de paiement), voir l'échéance (« En retard » si dépassée).
+   **Rouvrir** permet de modifier une facture finalisée, y compris une facture importée : son numéro ne change pas,
+   la facture du mois est mise de côté le temps de la modification, « Annuler les modifications » la remet exactement
+   comme avant, et l'ancien PDF est gardé dans `Factures\Versions remplacées\`. Si une facture payée change de total,
+   elle repasse « À payer ».
 4. **État des résultats** : revenus de l'année par catégorie, reste à encaisser.
 
 ## Règle de calcul (assemblée virtuelle)

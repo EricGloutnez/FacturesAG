@@ -36,18 +36,24 @@
           <DockPanel Margin="0,0,0,16">
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Bottom">
               <Button Content="Coller depuis ag-connect" Click="OpenPaste_Click" Margin="0,0,8,0"/>
-              <Button Content="+ Assemblée" Click="AddLine_Click"/>
+              <Button Content="+ Assemblée" Click="AddLine_Click" Margin="0,0,8,0"/>
+              <Button Content="+ Ligne libre" Click="AddFreeLine_Click" ToolTip="Formation, per diem, kilométrage… : description et montant saisis à la main"/>
             </StackPanel>
             <StackPanel>
-              <TextBlock Style="{StaticResource Help}"><Run Text="Facture en cours · "/><Run x:Name="ClientNameRun"/></TextBlock>
+              <TextBlock Style="{StaticResource Help}"><Run x:Name="DraftEyebrow" Text="Facture en cours · "/><Run x:Name="ClientNameRun"/></TextBlock>
               <StackPanel Orientation="Horizontal">
                 <TextBlock x:Name="DraftTitle" Style="{StaticResource H1}"/>
-                <Border Style="{StaticResource Badge}" Background="{StaticResource WarnBg}" Margin="10,4,0,0">
-                  <TextBlock Text="Brouillon" FontSize="12" Foreground="{StaticResource Warn}" FontWeight="SemiBold"/>
+                <Border x:Name="DraftBadge" Style="{StaticResource Badge}" Background="{StaticResource WarnBg}" Margin="10,4,0,0">
+                  <TextBlock x:Name="DraftBadgeText" Text="Brouillon" FontSize="12" Foreground="{StaticResource Warn}" FontWeight="SemiBold"/>
                 </Border>
               </StackPanel>
             </StackPanel>
           </DockPanel>
+
+          <!-- Bandeau : facture rouverte -->
+          <Border x:Name="ReopenBanner" Background="{StaticResource AccentSoft}" CornerRadius="8" Padding="14,10" Margin="0,0,0,16" Visibility="Collapsed">
+            <TextBlock x:Name="ReopenBannerText" TextWrapping="Wrap" Foreground="{StaticResource Accent}"/>
+          </Border>
 
           <!-- Coller depuis ag-connect -->
           <Border x:Name="PastePanel" Style="{StaticResource Card}" Visibility="Collapsed">
@@ -105,6 +111,21 @@
                           <ColumnDefinition Width="*"/><ColumnDefinition Width="140"/><ColumnDefinition Width="90"/>
                           <ColumnDefinition Width="90"/><ColumnDefinition Width="70"/><ColumnDefinition Width="170"/><ColumnDefinition Width="40"/>
                         </Grid.ColumnDefinitions>
+                        <!-- Ligne libre : catégorie, description, montant -->
+                        <Grid Grid.ColumnSpan="6" Visibility="{Binding IsFree, Converter={StaticResource Vis}}">
+                          <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                          <ComboBox IsEditable="True" Text="{Binding Category, UpdateSourceTrigger=LostFocus}" VerticalAlignment="Center" Margin="0,0,8,0" Padding="6,5"
+                                    ItemsSource="{Binding DataContext.Categories, RelativeSource={RelativeSource AncestorType=Window}}" ToolTip="Catégorie"/>
+                          <TextBox Grid.Column="1" Style="{StaticResource CellBox}" Text="{Binding Description, UpdateSourceTrigger=LostFocus}" VerticalAlignment="Center" Margin="0,0,8,0" ToolTip="Description"/>
+                          <TextBox Grid.Column="2" Style="{StaticResource CellBox}" Text="{Binding AmountText, UpdateSourceTrigger=LostFocus}" TextAlignment="Right" FontWeight="SemiBold"
+                                   HorizontalAlignment="Right" Width="110" VerticalAlignment="Center" ToolTip="Montant"/>
+                        </Grid>
+                        <!-- Assemblée calculée -->
+                        <Grid Grid.ColumnSpan="6" Visibility="{Binding IsAssembly, Converter={StaticResource Vis}}">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*"/><ColumnDefinition Width="140"/><ColumnDefinition Width="90"/>
+                          <ColumnDefinition Width="90"/><ColumnDefinition Width="70"/><ColumnDefinition Width="170"/>
+                        </Grid.ColumnDefinitions>
                         <StackPanel Margin="0,0,8,0">
                           <TextBox Style="{StaticResource CellBox}" Text="{Binding Entity, UpdateSourceTrigger=LostFocus}"/>
                           <TextBlock Text="{Binding Detail}" Style="{StaticResource Help}" Margin="7,0,0,0"/>
@@ -134,7 +155,8 @@
                           <TextBlock Text="{Binding ForcedNote}" FontSize="11" Foreground="{StaticResource Warn}" HorizontalAlignment="Right"
                                      Visibility="{Binding IsForced, Converter={StaticResource Vis}}"/>
                         </StackPanel>
-                        <Button Grid.Column="6" Content="✕" Style="{StaticResource IconBtn}" ToolTip="Retirer cette assemblée" Click="DeleteLine_Click" Tag="{Binding}"/>
+                        </Grid>
+                        <Button Grid.Column="6" Content="✕" Style="{StaticResource IconBtn}" ToolTip="Retirer cette ligne" Click="DeleteLine_Click" Tag="{Binding}"/>
                       </Grid>
                     </Border>
                   </DataTemplate>
@@ -163,7 +185,13 @@
               <TextBlock Text="Date de facture" Style="{StaticResource FieldLabel}"/>
               <DatePicker x:Name="FinalizeDate" Width="160"/>
             </StackPanel>
+            <StackPanel Margin="0,0,12,0">
+              <TextBlock Text="Délai de paiement" Style="{StaticResource FieldLabel}"/>
+              <ComboBox x:Name="PaymentDaysBox" Width="210" Padding="8,5" DisplayMemberPath="Label" SelectedValuePath="Days"/>
+            </StackPanel>
             <Button x:Name="FinalizeBtn" Style="{StaticResource Primary}" Click="Finalize_Click" VerticalAlignment="Bottom"/>
+            <Button x:Name="CancelReopenBtn" Content="Annuler les modifications" Style="{StaticResource Ghost}" Click="CancelReopen_Click" VerticalAlignment="Bottom" Margin="0,0,8,0" Visibility="Collapsed"/>
+            <Button x:Name="SaveReopenBtn" Content="Enregistrer les modifications" Style="{StaticResource Primary}" Click="SaveReopen_Click" VerticalAlignment="Bottom" Visibility="Collapsed"/>
           </StackPanel>
         </StackPanel>
 
@@ -187,8 +215,9 @@
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                   </DataGridTemplateColumn>
-                  <DataGridTextColumn Header="Date" Binding="{Binding Date}" Width="160"/>
-                  <DataGridTextColumn Header="Total" Binding="{Binding Total}" Width="110">
+                  <DataGridTextColumn Header="Date" Binding="{Binding Date}" Width="140"/>
+                  <DataGridTextColumn Header="Échéance" Binding="{Binding Due}" Width="140"/>
+                  <DataGridTextColumn Header="Total" Binding="{Binding Total}" Width="100">
                     <DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="HorizontalAlignment" Value="Right"/></Style></DataGridTextColumn.ElementStyle>
                   </DataGridTextColumn>
                   <DataGridTemplateColumn Header="Statut" Width="*">
@@ -199,7 +228,11 @@
                             <Border.Style>
                               <Style TargetType="Border">
                                 <Setter Property="Background" Value="{StaticResource WarnBg}"/>
-                                <Style.Triggers><DataTrigger Binding="{Binding IsPaid}" Value="True"><Setter Property="Background" Value="{StaticResource OkBg}"/></DataTrigger></Style.Triggers>
+                                <Style.Triggers>
+                                  <DataTrigger Binding="{Binding Tone}" Value="ok"><Setter Property="Background" Value="{StaticResource OkBg}"/></DataTrigger>
+                                  <DataTrigger Binding="{Binding Tone}" Value="danger"><Setter Property="Background" Value="#FBE4E1"/></DataTrigger>
+                                  <DataTrigger Binding="{Binding Tone}" Value="info"><Setter Property="Background" Value="{StaticResource AccentSoft}"/></DataTrigger>
+                                </Style.Triggers>
                               </Style>
                             </Border.Style>
                             <TextBlock Text="{Binding Status}" FontSize="12" FontWeight="SemiBold"/>
@@ -209,11 +242,12 @@
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                   </DataGridTemplateColumn>
-                  <DataGridTemplateColumn Header="" Width="340">
+                  <DataGridTemplateColumn Header="" Width="420">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                           <Button Content="{Binding PdfLabel}" Style="{StaticResource Ghost}" Click="InvoicePdf_Click" Tag="{Binding}" Padding="10,4"/>
+                          <Button Content="{Binding ReopenLabel}" Style="{StaticResource Ghost}" Click="InvoiceReopen_Click" Tag="{Binding}" Padding="10,4"/>
                           <Button Content="{Binding PaidLabel}" Click="InvoicePaid_Click" Tag="{Binding}" Padding="10,4" Margin="6,0,0,0"/>
                         </StackPanel>
                       </DataTemplate>
@@ -290,12 +324,38 @@
                 <StackPanel Style="{StaticResource Field}" Width="320"><TextBlock Text="Ville, province, code postal" Style="{StaticResource FieldLabel}"/><TextBox Tag="client_city"/></StackPanel>
               </WrapPanel>
               <TextBlock Text="Facture" Style="{StaticResource H2}" Margin="0,12,0,8"/>
-              <StackPanel Style="{StaticResource Field}"><TextBlock Text="Conditions de paiement" Style="{StaticResource FieldLabel}"/><TextBox Tag="payment_terms" TextWrapping="Wrap" AcceptsReturn="True" Height="56" VerticalContentAlignment="Top"/></StackPanel>
               <WrapPanel>
-                <StackPanel Style="{StaticResource Field}" Width="320"><TextBlock Text="Message de bas de page" Style="{StaticResource FieldLabel}"/><TextBox Tag="footer"/></StackPanel>
+                <StackPanel Style="{StaticResource Field}" Width="240">
+                  <TextBlock Text="Délai de paiement (par défaut)" Style="{StaticResource FieldLabel}"/>
+                  <ComboBox x:Name="SettingsPaymentDays" Padding="8,5" DisplayMemberPath="Label" SelectedValuePath="Days"/>
+                </StackPanel>
                 <StackPanel Style="{StaticResource Field}" Width="200"><TextBlock Text="Prochain numéro de facture" Style="{StaticResource FieldLabel}"/><TextBox Tag="next_number"/></StackPanel>
               </WrapPanel>
+              <StackPanel Style="{StaticResource Field}">
+                <TextBlock Text="Modes de paiement acceptés (affiché sur la facture, après le délai)" Style="{StaticResource FieldLabel}"/>
+                <TextBox Tag="payment_terms" TextWrapping="Wrap" AcceptsReturn="True" Height="56" VerticalContentAlignment="Top"/>
+              </StackPanel>
+              <StackPanel Style="{StaticResource Field}" Width="320" HorizontalAlignment="Left"><TextBlock Text="Message de bas de page" Style="{StaticResource FieldLabel}"/><TextBox Tag="footer"/></StackPanel>
               <Button Content="Enregistrer" Style="{StaticResource Primary}" HorizontalAlignment="Right" Click="SaveSettings_Click"/>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Text="Logo" Style="{StaticResource H2}"/>
+              <TextBlock Style="{StaticResource Help}" Margin="0,0,0,10" Text="Image PNG ou JPEG affichée en haut de vos factures (fond transparent conseillé)."/>
+              <StackPanel Orientation="Horizontal">
+                <Border BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="8" Width="240" Height="90" Padding="8" Margin="0,0,16,0">
+                  <Grid>
+                    <TextBlock x:Name="LogoEmpty" Text="Aucun logo" Style="{StaticResource Help}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <Image x:Name="LogoPreview" Stretch="Uniform"/>
+                  </Grid>
+                </Border>
+                <StackPanel VerticalAlignment="Center">
+                  <Button Content="Choisir une image…" Click="ChooseLogo_Click" Margin="0,0,0,8"/>
+                  <Button x:Name="RemoveLogoBtn" Content="Retirer le logo" Style="{StaticResource Ghost}" Click="RemoveLogo_Click"/>
+                </StackPanel>
+              </StackPanel>
             </StackPanel>
           </Border>
 

@@ -25,10 +25,19 @@ public sealed class Store : IDisposable
         ["client_email"] = "",
         ["client_street"] = "",
         ["client_city"] = "",
-        ["payment_terms"] = "Solde payable sur réception par virement Interac, par chèque ou comptant. Net 15 jours suivant la date de facture.",
+        ["payment_terms"] = DefaultPaymentTerms,
+        ["payment_days"] = "15",
         ["footer"] = "Merci de votre confiance.",
         ["next_number"] = "1",
+        ["logo_file"] = "",
     };
+
+    public const string DefaultPaymentTerms = "Paiement par virement Interac, par chèque ou comptant.";
+
+    /// <summary>Délais de paiement proposés (jours après la date de facture).</summary>
+    public static readonly IReadOnlyList<int> PaymentDayChoices = [0, 15, 30];
+
+    public static string PaymentDaysLabel(int days) => days == 0 ? "Net 0 (payable sur réception)" : $"Net {days} jours";
 
     /// <summary>
     /// Évolutions successives de la structure de la base. Chaque version n'est appliquée qu'une fois
@@ -50,6 +59,16 @@ public sealed class Store : IDisposable
               id INTEGER PRIMARY KEY, invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
               category TEXT NOT NULL, entity TEXT, date TEXT, start TEXT, end_time TEXT,
               quorum INTEGER NOT NULL DEFAULT 1, override_cents INTEGER, amount_cents INTEGER, description TEXT);
+            """),
+        // 0.3.0 : délai de paiement mémorisé par facture, réouverture d'une facture (copie pour annuler).
+        new(2, """
+            ALTER TABLE invoices ADD COLUMN payment_days INTEGER;
+            ALTER TABLE invoices ADD COLUMN editing INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE invoices ADD COLUMN snapshot TEXT;
+            UPDATE invoices SET payment_days = 15 WHERE source = 'app' AND status != 'draft';
+            UPDATE settings SET value = 'Paiement par virement Interac, par chèque ou comptant.'
+              WHERE key = 'payment_terms'
+                AND value = 'Solde payable sur réception par virement Interac, par chèque ou comptant. Net 15 jours suivant la date de facture.';
             """),
     ];
 
@@ -172,6 +191,8 @@ public sealed class Store : IDisposable
         {
             if (!DefaultSettings.ContainsKey(k)) continue;
             if (k == "next_number" && !Regex.IsMatch(v ?? "", @"^\d+$")) throw new UserException("Le prochain numéro de facture doit être un nombre entier.");
+            if (k == "payment_days" && !(int.TryParse(v, out var days) && PaymentDayChoices.Contains(days)))
+                throw new UserException("Délai de paiement invalide : choisissez Net 0, Net 15 ou Net 30.");
             Exec("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", k, v ?? "");
         }
     }
@@ -190,11 +211,16 @@ public sealed class Store : IDisposable
 
     public void DeleteRate(long id) => Exec("DELETE FROM rates WHERE id = $1", id);
 
-    // ---------- Facture en cours ----------
+    // ---------- Facture en cours (brouillon du mois ou facture rouverte) ----------
     private long DraftId() =>
         Scalar("SELECT id FROM invoices WHERE status = 'draft' ORDER BY id LIMIT 1") is long id
             ? id
             : Insert("INSERT INTO invoices (status) VALUES ('draft')");
+
+    private long? EditingId() => Scalar("SELECT id FROM invoices WHERE editing = 1 ORDER BY id LIMIT 1") as long?;
+
+    /// <summary>Facture que l'écran de saisie modifie : la facture rouverte s'il y en a une, sinon le brouillon du mois.</summary>
+    private long WorkingId() => EditingId() ?? DraftId();
 
     private sealed record RawLine(long Id, string Category, string? Entity, string Date, string Start, string End, bool Quorum,
         long? OverrideCents, long? AmountCents, string? Description);
@@ -212,12 +238,26 @@ public sealed class Store : IDisposable
             l.OverrideCents is long ov ? FromCents(ov) : null, computed, amount, description);
     }
 
+    private List<LineView> LinesOf(long invoiceId)
+    {
+        var rates = ListRates();
+        return Query("SELECT * FROM lines WHERE invoice_id = $1 ORDER BY date, start, id", ReadLine, invoiceId).Select(l => Present(l, rates)).ToList();
+    }
+
     public Draft GetDraft()
     {
+        if (EditingId() is long editing)
+        {
+            var inv = Query("SELECT * FROM invoices WHERE id = $1", ReadSummary, editing)[0];
+            var original = JsonDocument.Parse(Scalar("SELECT snapshot FROM invoices WHERE id = $1", editing) as string ?? "{}").RootElement;
+            var originalTotal = original.TryGetProperty("total_cents", out var t) && t.ValueKind == JsonValueKind.Number ? FromCents(t.GetInt64()) : inv.Total;
+            var lines = LinesOf(editing);
+            return new Draft(editing, lines, lines.Sum(l => l.Amount ?? 0m), lines.Count(l => l.Amount is null),
+                inv.Number, inv.InvoiceDate, inv.PaymentDays, IsReopened: true, WasPaid: inv.Status == InvoiceStatus.Paid, OriginalTotal: originalTotal);
+        }
         var id = DraftId();
-        var rates = ListRates();
-        var lines = Query("SELECT * FROM lines WHERE invoice_id = $1 ORDER BY date, start, id", ReadLine, id).Select(l => Present(l, rates)).ToList();
-        return new Draft(id, lines, lines.Sum(l => l.Amount ?? 0m), lines.Count(l => l.Amount is null));
+        var draftLines = LinesOf(id);
+        return new Draft(id, draftLines, draftLines.Sum(l => l.Amount ?? 0m), draftLines.Count(l => l.Amount is null));
     }
 
     /// <summary>Une assemblée déjà facturée ou en cours (même entité, même date) n'est pas ajoutée deux fois.</summary>
@@ -228,8 +268,29 @@ public sealed class Store : IDisposable
         if (string.IsNullOrWhiteSpace(entity)) throw new UserException("Le nom de l'entité juridique est requis.");
         if (!IsIsoDate(date)) throw new UserException("Date invalide.");
         return Insert("INSERT INTO lines (invoice_id, category, entity, date, start, end_time, quorum) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            DraftId(), CategorieVirtuelle, entity.Trim(), date, CheckTime(start, "Heure de début"), CheckTime(end, "Heure de fin"), quorum ? 1 : 0);
+            WorkingId(), CategorieVirtuelle, entity.Trim(), date, CheckTime(start, "Heure de début"), CheckTime(end, "Heure de fin"), quorum ? 1 : 0);
     }
+
+    /// <summary>Ligne libre : catégorie, description et montant saisis à la main (formation, per diem, kilométrage…).</summary>
+    public long AddFreeLine(string category, string description, decimal amount, string date)
+    {
+        CheckFree(category, description, amount);
+        if (!IsIsoDate(date)) throw new UserException("Date invalide.");
+        return Insert("INSERT INTO lines (invoice_id, category, entity, date, start, end_time, quorum, amount_cents, description) VALUES ($1, $2, NULL, $3, '', '', 1, $4, $5)",
+            WorkingId(), category.Trim(), date, ToCents(amount), description.Trim());
+    }
+
+    private static void CheckFree(string? category, string? description, decimal? amount)
+    {
+        if (category is not null && string.IsNullOrWhiteSpace(category)) throw new UserException("La catégorie est requise.");
+        if (description is not null && string.IsNullOrWhiteSpace(description)) throw new UserException("La description est requise.");
+        if (amount is < 0) throw new UserException("Le montant ne peut pas être négatif.");
+    }
+
+    /// <summary>Catégories déjà utilisées (pour proposer une liste lors de la saisie d'une ligne libre).</summary>
+    public List<string> KnownCategories() =>
+        Query("SELECT DISTINCT category FROM lines ORDER BY category", r => (string)r["category"])
+            .Union([CategorieVirtuelle, "Formation", "Kilométrage", "Per Diem"]).Distinct().OrderBy(c => c, StringComparer.CurrentCulture).ToList();
 
     public PasteResult AddFromAgConnect(IEnumerable<AgConnectItem> items) => InTransaction(() =>
     {
@@ -246,26 +307,48 @@ public sealed class Store : IDisposable
 
     private RawLine EditableLine(long id)
     {
-        var status = Scalar("SELECT i.status FROM lines l JOIN invoices i ON i.id = l.invoice_id WHERE l.id = $1", id) as string
-            ?? throw new UserException("Ligne introuvable.");
-        if (status != "draft") throw new UserException("Cette facture est finalisée : ses lignes ne peuvent plus être modifiées.");
+        var row = Query("SELECT i.status, i.editing FROM lines l JOIN invoices i ON i.id = l.invoice_id WHERE l.id = $1",
+            r => (Status: (string)r["status"], Editing: (long)r["editing"] != 0), id).FirstOrDefault();
+        if (row.Status is null) throw new UserException("Ligne introuvable.");
+        if (row.Status != "draft" && !row.Editing)
+            throw new UserException("Cette facture est finalisée : rouvrez-la pour la modifier.");
         return Query("SELECT * FROM lines WHERE id = $1", ReadLine, id)[0];
     }
 
-    /// <summary>Modifie une ligne de la facture en cours. Un paramètre null n'est pas modifié.</summary>
+    /// <summary>
+    /// Modifie une assemblée de la facture en cours. Un paramètre null n'est pas modifié.
+    /// Une assemblée modifiée est recalculée ; une assemblée non touchée d'une facture rouverte garde son montant.
+    /// </summary>
     public void UpdateLine(long id, string? entity = null, string? date = null, string? start = null, string? end = null,
         bool? quorum = null, decimal? overrideAmount = null, bool clearOverride = false)
     {
         var l = EditableLine(id);
+        if (l.Entity is null) throw new UserException("Cette ligne est une ligne libre : modifiez sa description ou son montant.");
         var e = entity?.Trim() ?? l.Entity;
         var d = date ?? l.Date;
         if (string.IsNullOrWhiteSpace(e)) throw new UserException("Le nom de l'entité juridique est requis.");
         if (!IsIsoDate(d)) throw new UserException("Date invalide.");
         if (overrideAmount is < 0) throw new UserException("Le montant ne peut pas être négatif.");
+        var s = start is null ? l.Start : CheckTime(start, "Heure de début");
+        var en = end is null ? l.End : CheckTime(end, "Heure de fin");
+        var q = quorum ?? l.Quorum;
         long? ov = clearOverride ? null : overrideAmount is decimal o ? ToCents(o) : l.OverrideCents;
-        Exec("UPDATE lines SET entity = $1, date = $2, start = $3, end_time = $4, quorum = $5, override_cents = $6 WHERE id = $7",
-            e, d, start is null ? l.Start : CheckTime(start, "Heure de début"), end is null ? l.End : CheckTime(end, "Heure de fin"),
-            (quorum ?? l.Quorum) ? 1 : 0, ov, id);
+        // Un changement qui influe sur le calcul (ou l'abandon d'un montant forcé) efface le montant figé : il sera recalculé.
+        var recompute = clearOverride || e != l.Entity || d != l.Date || s != l.Start || en != l.End || q != l.Quorum;
+        var describe = e != l.Entity || s != l.Start || en != l.End || q != l.Quorum;
+        Exec("UPDATE lines SET entity = $1, date = $2, start = $3, end_time = $4, quorum = $5, override_cents = $6, amount_cents = $7, description = $8 WHERE id = $9",
+            e, d, s, en, q ? 1 : 0, ov, recompute ? null : l.AmountCents, describe ? null : l.Description, id);
+    }
+
+    /// <summary>Modifie une ligne libre. Un paramètre null n'est pas modifié.</summary>
+    public void UpdateFreeLine(long id, string? category = null, string? description = null, decimal? amount = null)
+    {
+        var l = EditableLine(id);
+        if (l.Entity is not null) throw new UserException("Cette ligne est une assemblée : modifiez ses heures.");
+        CheckFree(category, description, amount);
+        Exec("UPDATE lines SET category = $1, description = $2, amount_cents = $3, override_cents = NULL WHERE id = $4",
+            category?.Trim() ?? l.Category, description?.Trim() ?? l.Description,
+            amount is decimal a ? ToCents(a) : l.OverrideCents ?? l.AmountCents, id);
     }
 
     public void DeleteLine(long id)
@@ -274,24 +357,118 @@ public sealed class Store : IDisposable
         Exec("DELETE FROM lines WHERE id = $1", id);
     }
 
-    /// <summary>Fige la facture en cours : numéro, date, montants et descriptions définitifs.</summary>
-    public long Finalize(string invoiceDate)
+    private static int CheckPaymentDays(int days) =>
+        PaymentDayChoices.Contains(days) ? days : throw new UserException("Délai de paiement invalide : choisissez Net 0, Net 15 ou Net 30.");
+
+    private void CheckComplete(Draft d, string emptyMessage)
+    {
+        if (d.Lines.Count == 0) throw new UserException(emptyMessage);
+        if (d.Incomplete > 0) throw new UserException($"{d.Incomplete} assemblée(s) sans heure de fin : complétez-les avant de continuer.");
+    }
+
+    private void FreezeLines(Draft d)
+    {
+        foreach (var l in d.Lines)
+            Exec("UPDATE lines SET amount_cents = $1, description = $2 WHERE id = $3", ToCents(l.Amount!.Value), l.Description, l.Id);
+    }
+
+    /// <summary>Fige la facture du mois : numéro, date, délai de paiement, montants et descriptions définitifs.</summary>
+    public long Finalize(string invoiceDate, int? paymentDays = null)
     {
         if (!IsIsoDate(invoiceDate)) throw new UserException("Date de facture invalide.");
+        if (EditingId() is not null) throw new UserException("Une facture est en cours de modification : enregistrez ou annulez d'abord ses modifications.");
+        var days = CheckPaymentDays(paymentDays ?? int.Parse(GetSettings()["payment_days"], CultureInfo.InvariantCulture));
         var draft = GetDraft();
-        if (draft.Lines.Count == 0) throw new UserException("La facture en cours est vide.");
-        if (draft.Incomplete > 0) throw new UserException($"{draft.Incomplete} assemblée(s) sans heure de fin : complétez-les avant de finaliser.");
+        CheckComplete(draft, "La facture en cours est vide.");
         return InTransaction(() =>
         {
             var number = int.Parse(GetSettings()["next_number"], CultureInfo.InvariantCulture);
             if (Scalar("SELECT 1 FROM invoices WHERE number = $1", number) is not null)
                 throw new UserException($"Le numéro {number} est déjà utilisé : corrigez le prochain numéro dans les réglages.");
-            foreach (var l in draft.Lines)
-                Exec("UPDATE lines SET amount_cents = $1, description = $2 WHERE id = $3", ToCents(l.Amount!.Value), l.Description, l.Id);
-            Exec("UPDATE invoices SET status = 'final', number = $1, invoice_date = $2, finalized_at = $3, total_cents = $4 WHERE id = $5",
-                number, invoiceDate, DateTime.UtcNow.ToString("o"), ToCents(draft.Total), draft.Id);
+            FreezeLines(draft);
+            Exec("UPDATE invoices SET status = 'final', number = $1, invoice_date = $2, finalized_at = $3, total_cents = $4, payment_days = $5 WHERE id = $6",
+                number, invoiceDate, DateTime.UtcNow.ToString("o"), ToCents(draft.Total), days, draft.Id);
             Exec("UPDATE settings SET value = $1 WHERE key = 'next_number'", (number + 1).ToString(CultureInfo.InvariantCulture));
             return draft.Id;
+        });
+    }
+
+    // ---------- Réouverture d'une facture finalisée ----------
+    /// <summary>Rouvre une facture pour la modifier. Une copie est gardée pour pouvoir annuler.</summary>
+    public void Reopen(long id)
+    {
+        if (EditingId() is long other)
+        {
+            var n = Scalar("SELECT number FROM invoices WHERE id = $1", other);
+            throw new UserException($"La facture n° {n} est déjà en cours de modification : enregistrez ou annulez d'abord ses modifications.");
+        }
+        var inv = Query("SELECT * FROM invoices WHERE id = $1 AND status != 'draft'", r => new
+        {
+            status = (string)r["status"], invoice_date = Str(r, "invoice_date"), paid_at = Str(r, "paid_at"),
+            payment_method = Str(r, "payment_method"), total_cents = Long(r, "total_cents"), payment_days = Long(r, "payment_days"),
+        }, id).FirstOrDefault() ?? throw new UserException("Facture introuvable.");
+        var lines = Query("SELECT * FROM lines WHERE invoice_id = $1 ORDER BY id", r => new
+        {
+            id = (long)r["id"], category = (string)r["category"], entity = Str(r, "entity"), date = Str(r, "date"), start = Str(r, "start"),
+            end_time = Str(r, "end_time"), quorum = (long)r["quorum"], override_cents = Long(r, "override_cents"),
+            amount_cents = Long(r, "amount_cents"), description = Str(r, "description"),
+        }, id);
+        var snapshot = JsonSerializer.Serialize(new { inv.status, inv.invoice_date, inv.paid_at, inv.payment_method, inv.total_cents, inv.payment_days, lines });
+        Exec("UPDATE invoices SET editing = 1, snapshot = $1 WHERE id = $2", snapshot, id);
+    }
+
+    /// <summary>
+    /// Enregistre la facture rouverte (même numéro). Si elle était payée et que son total change,
+    /// elle repasse « À payer ».
+    /// </summary>
+    public ReopenSaveResult SaveReopened(string invoiceDate, int paymentDays)
+    {
+        if (!IsIsoDate(invoiceDate)) throw new UserException("Date de facture invalide.");
+        CheckPaymentDays(paymentDays);
+        var d = GetDraft();
+        if (!d.IsReopened) throw new UserException("Aucune facture n'est en cours de modification.");
+        CheckComplete(d, "La facture est vide : ajoutez au moins une ligne.");
+        var paymentReset = d.WasPaid && d.Total != d.OriginalTotal;
+        InTransaction(() =>
+        {
+            FreezeLines(d);
+            Exec("""
+                UPDATE invoices SET invoice_date = $1, payment_days = $2, total_cents = $3, editing = 0, snapshot = NULL,
+                  status = CASE WHEN $4 = 1 THEN 'final' ELSE status END,
+                  paid_at = CASE WHEN $4 = 1 THEN NULL ELSE paid_at END,
+                  payment_method = CASE WHEN $4 = 1 THEN NULL ELSE payment_method END
+                WHERE id = $5
+                """, invoiceDate, paymentDays, ToCents(d.Total), paymentReset ? 1 : 0, d.Id);
+            return 0;
+        });
+        return new ReopenSaveResult(d.Id, d.Number!.Value, paymentReset);
+    }
+
+    /// <summary>Annule les modifications : la facture rouverte revient exactement comme avant.</summary>
+    public void CancelReopen()
+    {
+        if (EditingId() is not long id) return;
+        using var snap = JsonDocument.Parse(Scalar("SELECT snapshot FROM invoices WHERE id = $1", id) as string
+            ?? throw new UserException("Copie de la facture introuvable : impossible d'annuler."));
+        var s = snap.RootElement;
+        static object? V(JsonElement e, string name) => e.GetProperty(name).ValueKind switch
+        {
+            JsonValueKind.Null => null,
+            JsonValueKind.Number => e.GetProperty(name).GetInt64(),
+            _ => e.GetProperty(name).GetString(),
+        };
+        InTransaction(() =>
+        {
+            Exec("DELETE FROM lines WHERE invoice_id = $1", id);
+            foreach (var l in s.GetProperty("lines").EnumerateArray())
+            {
+                Exec("INSERT INTO lines (id, invoice_id, category, entity, date, start, end_time, quorum, override_cents, amount_cents, description) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                    V(l, "id"), id, V(l, "category"), V(l, "entity"), V(l, "date"), V(l, "start"), V(l, "end_time"), V(l, "quorum"),
+                    V(l, "override_cents"), V(l, "amount_cents"), V(l, "description"));
+            }
+            Exec("UPDATE invoices SET status = $1, invoice_date = $2, paid_at = $3, payment_method = $4, total_cents = $5, payment_days = $6, editing = 0, snapshot = NULL WHERE id = $7",
+                V(s, "status"), V(s, "invoice_date"), V(s, "paid_at"), V(s, "payment_method"), V(s, "total_cents"), V(s, "payment_days"), id);
+            return 0;
         });
     }
 
@@ -299,7 +476,8 @@ public sealed class Store : IDisposable
     private static InvoiceSummary ReadSummary(SqliteDataReader r) => new(
         (long)r["id"], (int)(long)r["number"],
         (string)r["status"] == "paid" ? InvoiceStatus.Paid : InvoiceStatus.Final,
-        Str(r, "invoice_date") ?? "", Str(r, "paid_at"), Str(r, "payment_method"), FromCents(Long(r, "total_cents") ?? 0), (string)r["source"]);
+        Str(r, "invoice_date") ?? "", Str(r, "paid_at"), Str(r, "payment_method"), FromCents(Long(r, "total_cents") ?? 0), (string)r["source"],
+        Long(r, "payment_days") is long d ? (int)d : null, (long)r["editing"] != 0);
 
     public List<InvoiceSummary> ListInvoices() =>
         Query("SELECT * FROM invoices WHERE status != 'draft' ORDER BY number DESC", ReadSummary);
@@ -308,16 +486,18 @@ public sealed class Store : IDisposable
     {
         var inv = Query("SELECT * FROM invoices WHERE id = $1 AND status != 'draft'", ReadSummary, id).FirstOrDefault()
             ?? throw new UserException("Facture introuvable.");
-        var rates = ListRates();
-        var lines = Query("SELECT * FROM lines WHERE invoice_id = $1 ORDER BY id", ReadLine, id).Select(l => Present(l, rates)).ToList();
-        return new InvoiceDetail(inv, lines);
+        return new InvoiceDetail(inv, LinesOf(id));
     }
 
-    /// <summary>La facture en cours sous forme de facture (numéro 0) pour l'aperçu PDF.</summary>
-    public InvoiceDetail DraftAsInvoice()
+    /// <summary>La facture en cours sous forme de facture, pour l'aperçu PDF.</summary>
+    public InvoiceDetail DraftAsInvoice(string? invoiceDate = null, int? paymentDays = null)
     {
         var d = GetDraft();
-        return new InvoiceDetail(new InvoiceSummary(d.Id, 0, InvoiceStatus.Draft, "", null, null, d.Total, "app"), d.Lines);
+        var days = paymentDays ?? d.PaymentDays ?? int.Parse(GetSettings()["payment_days"], CultureInfo.InvariantCulture);
+        var summary = d.IsReopened
+            ? new InvoiceSummary(d.Id, d.Number!.Value, InvoiceStatus.Final, invoiceDate ?? d.InvoiceDate ?? "", null, null, d.Total, "app", days)
+            : new InvoiceSummary(d.Id, 0, InvoiceStatus.Draft, "", null, null, d.Total, "app", days);
+        return new InvoiceDetail(summary, d.Lines);
     }
 
     public void MarkPaid(long id, string paidAt, string? paymentMethod)
@@ -335,7 +515,7 @@ public sealed class Store : IDisposable
     {
         var y = year.ToString(CultureInfo.InvariantCulture);
         var rows = Query("""
-            SELECT l.category, SUM(l.amount_cents) cents, COUNT(*) n
+            SELECT l.category, SUM(COALESCE(l.amount_cents, l.override_cents, 0)) cents, COUNT(*) n
             FROM lines l JOIN invoices i ON i.id = l.invoice_id
             WHERE i.status != 'draft' AND substr(i.invoice_date, 1, 4) = $1
             GROUP BY l.category ORDER BY cents DESC

@@ -195,13 +195,153 @@ var tests = new List<(string Name, Action Body)>
         Eq("Facture-120.pdf", InvoicePdf.FileName(inv, s.GetSettings()));
     }),
 
+    // ---------- Délai de paiement ----------
+    ("délai de paiement : réglage par défaut, mémorisé par facture, échéance et retard", () =>
+    {
+        using var s = Fresh();
+        Eq("15", s.GetSettings()["payment_days"]);
+        s.AddLine("SDC A", "2026-11-03", "18:30", "21:00");
+        var a = s.GetInvoice(s.Finalize("2026-11-30")).Invoice;
+        Eq<int?>(15, a.PaymentDays);
+        Eq("2026-12-15", a.DueDate);
+        False(a.IsOverdue(new DateOnly(2026, 12, 15)));
+        True(a.IsOverdue(new DateOnly(2026, 12, 16)), "en retard le lendemain de l'échéance");
+        s.UpdateSettings(new Dictionary<string, string> { ["payment_days"] = "30" });
+        s.AddLine("SDC B", "2026-12-03", "18:30", "21:00");
+        var b = s.GetInvoice(s.Finalize("2026-12-31")).Invoice;
+        Eq<int?>(30, b.PaymentDays);
+        Eq<int?>(15, s.GetInvoice(a.Id).Invoice.PaymentDays); // une facture déjà émise ne change pas
+        s.AddLine("SDC C", "2027-01-03", "18:30", "21:00");
+        Eq<int?>(0, s.GetInvoice(s.Finalize("2027-01-31", paymentDays: 0)).Invoice.PaymentDays);
+        s.MarkPaid(a.Id, "2026-12-20", "Chèque");
+        False(s.GetInvoice(a.Id).Invoice.IsOverdue(new DateOnly(2027, 6, 1)));
+        Throws<UserException>(() => s.UpdateSettings(new Dictionary<string, string> { ["payment_days"] = "45" }), "Délai de paiement invalide");
+    }),
+    ("PDF : phrase du délai de paiement", () =>
+    {
+        var inv = new InvoiceSummary(1, 120, InvoiceStatus.Final, "2026-11-30", null, null, 90m, "app", 15);
+        Eq("Net 15 jours : payable au plus tard le 15 décembre 2026.", InvoicePdf.PaymentTermsSentence(inv));
+        Eq("Payable sur réception.", InvoicePdf.PaymentTermsSentence(inv with { PaymentDays = 0 }));
+        Eq<string?>(null, InvoicePdf.PaymentTermsSentence(inv with { PaymentDays = null }));
+    }),
+
+    // ---------- Lignes libres ----------
+    ("ligne libre : ajoutée, modifiée, finalisée avec les assemblées", () =>
+    {
+        using var s = Fresh();
+        s.AddLine("SDC A", "2026-11-03", "18:30", "21:00");
+        var f = s.AddFreeLine("Formation", "1,5 heure de formation", 60m, "2026-11-10");
+        var d = s.GetDraft();
+        Eq(150m, d.Total);
+        True(d.Lines.Single(l => l.Id == f).IsFree, "ligne libre");
+        s.UpdateFreeLine(f, description: "2 heures de formation", amount: 80m);
+        Eq(170m, s.GetDraft().Total);
+        Throws<UserException>(() => s.UpdateLine(f, end: "21:00"), "ligne libre");
+        Throws<UserException>(() => s.AddFreeLine("Formation", " ", 10m, "2026-11-10"), "description");
+        var inv = s.GetInvoice(s.Finalize("2026-11-30"));
+        Eq(170m, inv.Invoice.Total);
+        Eq("2 heures de formation", inv.Lines.Single(l => l.IsFree).Description);
+        True(s.KnownCategories().Contains("Formation"), "catégorie proposée");
+    }),
+
+    // ---------- Réouverture ----------
+    ("rouvrir : même numéro, assemblée modifiée recalculée, la facture du mois reste de côté", () =>
+    {
+        using var s = Fresh();
+        var line = s.AddLine("SDC A", "2026-11-03", "18:30", "20:34");
+        s.AddLine("SDC B", "2026-11-05", "18:30", "20:00");
+        var id = s.Finalize("2026-11-30");
+        s.AddLine("SDC Décembre", "2026-12-02", "18:30"); // facture du mois suivant, incomplète
+        s.Reopen(id);
+        var w = s.GetDraft();
+        True(w.IsReopened, "facture rouverte");
+        Eq<int?>(120, w.Number);
+        Eq(2, w.Lines.Count);
+        var lineId = w.Lines.Single(l => l.Entity == "SDC A").Id;
+        s.UpdateLine(lineId, end: "22:31"); // 4 h 01 → 5 h → 150 $
+        Eq(210m, s.GetDraft().Total);
+        Throws<UserException>(() => s.Finalize("2026-12-31"), "en cours de modification");
+        var r = s.SaveReopened("2026-11-30", 15);
+        Eq(120, r.Number); False(r.PaymentReset);
+        Eq(210m, s.GetInvoice(id).Invoice.Total);
+        Eq("SDC A (18h30 - 22h31)", s.GetInvoice(id).Lines.Single(l => l.Entity == "SDC A").Description);
+        var back = s.GetDraft();
+        False(back.IsReopened);
+        Eq("SDC Décembre", back.Lines.Single().Entity);
+        Eq("121", s.GetSettings()["next_number"]);
+    }),
+    ("rouvrir : une ligne non touchée garde son montant même si la grille a changé", () =>
+    {
+        using var s = Fresh();
+        s.AddLine("SDC A", "2026-11-03", "18:30", "20:34");
+        var id = s.Finalize("2026-11-30");
+        s.AddRate("2026-01-01", 40m, 2m); // nouveau taux à 40 $/h
+        s.Reopen(id);
+        s.AddFreeLine("Formation", "Formation", 60m, "2026-11-10");
+        Eq(150m, s.GetDraft().Total); // 90 $ conservés + 60 $
+        s.SaveReopened("2026-11-30", 15);
+        Eq(150m, s.GetInvoice(id).Invoice.Total);
+    }),
+    ("annuler les modifications : la facture revient exactement comme avant", () =>
+    {
+        using var s = Fresh();
+        s.AddLine("SDC A", "2026-11-03", "18:30", "20:34");
+        s.AddLine("SDC B", "2026-11-05", "18:30", "20:00");
+        var id = s.Finalize("2026-11-30");
+        s.MarkPaid(id, "2026-12-01", "Chèque");
+        var before = s.GetInvoice(id);
+        s.Reopen(id);
+        var w = s.GetDraft();
+        s.DeleteLine(w.Lines[0].Id);
+        s.UpdateLine(w.Lines[1].Id, end: "23:59");
+        s.AddFreeLine("Formation", "Ajout", 99m, "2026-11-10");
+        s.CancelReopen();
+        var after = s.GetInvoice(id);
+        Eq(before.Invoice, after.Invoice);
+        Eq(string.Join("|", before.Lines.Select(l => $"{l.Id}:{l.Description}:{l.Amount}")), string.Join("|", after.Lines.Select(l => $"{l.Id}:{l.Description}:{l.Amount}")));
+        False(s.GetDraft().IsReopened);
+    }),
+    ("facture payée rouverte : total changé → « À payer » ; total identique → reste payée", () =>
+    {
+        using var s = Fresh();
+        s.AddLine("SDC A", "2026-11-03", "18:30", "20:34");
+        var id = s.Finalize("2026-11-30");
+        s.MarkPaid(id, "2026-12-01", "Chèque");
+        s.Reopen(id);
+        s.SaveReopened("2026-11-29", 30); // seulement la date et le délai
+        var same = s.GetInvoice(id).Invoice;
+        Eq(InvoiceStatus.Paid, same.Status); Eq("2026-11-29", same.InvoiceDate); Eq<int?>(30, same.PaymentDays);
+        s.Reopen(id);
+        s.AddFreeLine("Per Diem", "Repas", 25m, "2026-11-03");
+        var r = s.SaveReopened("2026-11-29", 30);
+        True(r.PaymentReset, "paiement remis à zéro");
+        Eq(InvoiceStatus.Final, s.GetInvoice(id).Invoice.Status);
+        Eq<string?>(null, s.GetInvoice(id).Invoice.PaidAt);
+    }),
+    ("rouvrir : une seule à la fois ; facture importée de Finance D modifiable", () =>
+    {
+        using var s = new Store(":memory:");
+        s.ImportFinanceD(Sample.FinanceD);
+        var imported = s.ListInvoices().Single(i => i.Number == 18);
+        var other = s.ListInvoices().Single(i => i.Number == 19);
+        s.Reopen(imported.Id);
+        Throws<UserException>(() => s.Reopen(other.Id), "déjà en cours de modification");
+        var km = s.GetDraft().Lines.Single(l => l.Category == "Kilométrage");
+        True(km.IsFree, "ligne importée = ligne libre");
+        s.UpdateFreeLine(km.Id, amount: 14.04m);
+        var r = s.SaveReopened("2026-07-30", 15);
+        True(r.PaymentReset, "était payée, total changé");
+        Eq(104.04m, s.GetInvoice(imported.Id).Invoice.Total);
+        Eq<int?>(15, s.GetInvoice(imported.Id).Invoice.PaymentDays);
+    }),
+
     // ---------- Migrations de la base ----------
     ("base neuve : structure à jour", () =>
     {
         using var s = new Store(":memory:");
         Eq(Store.Migrations.Max(m => m.Version), s.SchemaVersion);
     }),
-    ("base de la version 0.1.0 (sans numéro) reconnue, données intactes, pas de sauvegarde inutile", () =>
+    ("base de la version 0.1.0 (sans numéro) : passage à la structure 2 avec sauvegarde, données intactes", () =>
     {
         var dir = Directory.CreateTempSubdirectory("fag-test-");
         try
@@ -211,11 +351,19 @@ var tests = new List<(string Name, Action Body)>
             var backups = Path.Combine(dir.FullName, "Sauvegardes");
             using (var s = new Store(file, backups))
             {
-                Eq(1, s.SchemaVersion);
+                Eq(2, s.SchemaVersion);
                 Eq(1, s.ListInvoices().Count);
                 Eq(90m, s.ListInvoices()[0].Total);
+                Eq<int?>(15, s.ListInvoices()[0].PaymentDays);              // anciennes factures : Net 15
+                Eq(Store.DefaultPaymentTerms, s.GetSettings()["payment_terms"]); // « Net 15 » retiré du texte libre
+                Eq("15", s.GetSettings()["payment_days"]);
             }
-            False(Directory.Exists(backups) && Directory.EnumerateFiles(backups).Any());
+            var saved = Directory.GetFiles(backups);
+            Eq(1, saved.Length);
+            True(saved[0].EndsWith("-avant-structure-2.db"), "nom de la sauvegarde");
+            // Une seconde ouverture ne refait ni migration ni sauvegarde.
+            using (new Store(file, backups)) { }
+            Eq(1, Directory.GetFiles(backups).Length);
         }
         finally { ClearPools(); dir.Delete(true); }
     }),
@@ -227,16 +375,18 @@ var tests = new List<(string Name, Action Body)>
             var file = Path.Combine(dir.FullName, "base.db");
             var backups = Path.Combine(dir.FullName, "Sauvegardes");
             CreateV010Database(file);
-            var withV2 = Store.Migrations.Append(new Migration(2, "ALTER TABLE lines ADD COLUMN km REAL;")).ToList();
-            using (var s = new Store(file, backups, withV2))
+            using (new Store(file)) { } // mise à la structure actuelle
+            var next = Store.Migrations.Max(m => m.Version) + 1;
+            var withNext = Store.Migrations.Append(new Migration(next, "ALTER TABLE lines ADD COLUMN km REAL;")).ToList();
+            using (var s = new Store(file, backups, withNext))
             {
-                Eq(2, s.SchemaVersion);
+                Eq(next, s.SchemaVersion);
                 Eq(90m, s.ListInvoices()[0].Total);
             }
             var saved = Directory.GetFiles(backups);
             Eq(1, saved.Length);
-            True(saved[0].EndsWith("-avant-structure-2.db"), "nom de la sauvegarde");
-            using (var copy = new Store(saved[0])) { Eq(1, copy.SchemaVersion); Eq(1, copy.ListInvoices().Count); }
+            True(saved[0].EndsWith($"-avant-structure-{next}.db"), "nom de la sauvegarde");
+            using (var copy = new Store(saved[0])) { Eq(next - 1, copy.SchemaVersion); Eq(1, copy.ListInvoices().Count); }
             // Une version plus ancienne de l'application refuse d'ouvrir une base plus récente.
             Throws<UserException>(() => new Store(file).Dispose(), "plus récente");
         }
@@ -321,7 +471,12 @@ int passed = 0, failed = 0;
 foreach (var (name, body) in tests)
 {
     try { body(); passed++; Console.WriteLine($"✔ {name}"); }
-    catch (Exception e) { failed++; Console.WriteLine($"✖ {name}\n    {e.Message}"); }
+    catch (Exception e)
+    {
+        failed++;
+        var where = e.StackTrace?.Split('\n').FirstOrDefault(l => l.Contains("Program.cs") || l.Contains("FacturesAG.Core"))?.Trim();
+        Console.WriteLine($"✖ {name}\n    {e.Message}\n    {where}");
+    }
 }
 Console.WriteLine($"\n{passed} réussi(s), {failed} échec(s)");
 return failed == 0 ? 0 : 1;

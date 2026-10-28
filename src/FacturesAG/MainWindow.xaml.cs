@@ -37,6 +37,9 @@ public partial class MainWindow : Window
         Closed += (_, _) => _store.Dispose();
 
         LinesList.ItemsSource = _lines;
+        DataContext = this;
+        PaymentDaysBox.ItemsSource = PaymentChoices;
+        SettingsPaymentDays.ItemsSource = PaymentChoices;
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
         DataPath.Text = _dataDir;
         VersionText.Text = $"Version {UpdateFlow.CurrentVersion} · mises à jour automatiques et obligatoires";
@@ -48,6 +51,14 @@ public partial class MainWindow : Window
     }
 
     private readonly DispatcherTimer _updateTimer = new() { Interval = TimeSpan.FromHours(4) };
+
+    public sealed record PaymentChoice(int Days, string Label);
+
+    public static IReadOnlyList<PaymentChoice> PaymentChoices { get; } =
+        Store.PaymentDayChoices.Select(d => new PaymentChoice(d, Store.PaymentDaysLabel(d))).ToList();
+
+    /// <summary>Catégories proposées pour les lignes libres.</summary>
+    public ObservableCollection<string> Categories { get; } = [];
 
     private async Task CheckForUpdateWhileRunningAsync()
     {
@@ -97,22 +108,50 @@ public partial class MainWindow : Window
     }
 
     // ---------- Facture en cours ----------
+    /// <summary>Id de la facture affichée la dernière fois : sert à réinitialiser date et délai quand on change de facture.</summary>
+    private long? _shownInvoiceId;
+
     private void LoadDraft()
     {
         var settings = _store.GetSettings();
         var draft = _store.GetDraft();
         _lines.Clear();
         foreach (var l in draft.Lines) _lines.Add(new LineRow(l, SaveLine));
+        Categories.Clear();
+        foreach (var c in _store.KnownCategories()) Categories.Add(c);
         ClientNameRun.Text = settings["client_name"] is { Length: > 0 } client ? client : "client à définir dans les Réglages";
+
+        var reopened = draft.IsReopened;
+        DraftEyebrow.Text = reopened ? "Facture rouverte · " : "Facture en cours · ";
+        DraftBadgeText.Text = reopened ? "Modification" : "Brouillon";
+        DraftBadge.Background = (System.Windows.Media.Brush)FindResource(reopened ? "AccentSoft" : "WarnBg");
+        DraftBadgeText.Foreground = (System.Windows.Media.Brush)FindResource(reopened ? "Accent" : "Warn");
+        ReopenBanner.Visibility = reopened ? Visibility.Visible : Visibility.Collapsed;
+        ReopenBannerText.Text = reopened
+            ? $"Vous modifiez la facture n° {draft.Number} (son numéro ne change pas). Votre facture du mois est mise de côté et reviendra intacte après l'enregistrement ou l'annulation."
+              + (draft.WasPaid ? " Cette facture est payée : si son total change, elle repassera « À payer »." : "")
+            : "";
+        FinalizeBtn.Visibility = reopened ? Visibility.Collapsed : Visibility.Visible;
+        SaveReopenBtn.Visibility = CancelReopenBtn.Visibility = reopened ? Visibility.Visible : Visibility.Collapsed;
         FinalizeBtn.Content = $"Finaliser la facture n° {settings["next_number"]}";
-        FinalizeDate.SelectedDate ??= DateTime.Today;
+
+        // Date et délai : ceux de la facture rouverte, sinon aujourd'hui et le délai par défaut (sans écraser un choix en cours).
+        if (_shownInvoiceId != draft.Id)
+        {
+            _shownInvoiceId = draft.Id;
+            FinalizeDate.SelectedDate = reopened ? Fmt.FromIso(draft.InvoiceDate) ?? DateTime.Today : DateTime.Today;
+            PaymentDaysBox.SelectedValue = draft.PaymentDays ?? int.Parse(settings["payment_days"], CultureInfo.InvariantCulture);
+        }
         RefreshDraftSummary(draft);
     }
+
+    private int SelectedPaymentDays =>
+        PaymentDaysBox.SelectedValue is int d ? d : int.Parse(_store.GetSettings()["payment_days"], CultureInfo.InvariantCulture);
 
     private void RefreshDraftSummary(Draft draft)
     {
         var first = draft.Lines.Select(l => Fmt.FromIso(l.Date)).FirstOrDefault(d => d is not null);
-        DraftTitle.Text = Fmt.MonthTitle(first ?? DateTime.Today);
+        DraftTitle.Text = draft.IsReopened ? $"Modification de la facture n° {draft.Number}" : Fmt.MonthTitle(first ?? DateTime.Today);
         DraftEmpty.Visibility = draft.Lines.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         DraftTotal.Text = Fmt.Money(draft.Total);
         var rate = _store.ListRates().LastOrDefault();
@@ -135,10 +174,13 @@ public partial class MainWindow : Window
                 case nameof(LineRow.End): _store.UpdateLine(row.Id, end: row.End); break;
                 case nameof(LineRow.Quorum): _store.UpdateLine(row.Id, quorum: row.Quorum); break;
                 case nameof(LineRow.OverrideText):
-                    var text = row.OverrideText.Trim().Replace(',', '.').Replace("$", "").Replace(" ", "");
-                    if (text.Length == 0) _store.UpdateLine(row.Id, clearOverride: true);
-                    else if (decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out var amount)) _store.UpdateLine(row.Id, overrideAmount: amount);
-                    else throw new UserException("Montant invalide : écrivez par exemple 180 ou 180.00.");
+                    if (ParseAmount(row.OverrideText) is decimal forced) _store.UpdateLine(row.Id, overrideAmount: forced);
+                    else _store.UpdateLine(row.Id, clearOverride: true);
+                    break;
+                case nameof(LineRow.Category): _store.UpdateFreeLine(row.Id, category: row.Category); break;
+                case nameof(LineRow.Description): _store.UpdateFreeLine(row.Id, description: row.Description); break;
+                case nameof(LineRow.AmountText):
+                    _store.UpdateFreeLine(row.Id, amount: ParseAmount(row.AmountText) ?? throw new UserException("Entrez le montant de la ligne."));
                     break;
             }
         }
@@ -154,6 +196,22 @@ public partial class MainWindow : Window
         RefreshDraftSummary(draft);
     }
 
+    /// <summary>« 180 », « 180,00 », « 180.00 $ » → 180 ; vide → null ; invalide → erreur.</summary>
+    private static decimal? ParseAmount(string? text)
+    {
+        var t = (text ?? "").Trim().Replace(',', '.').Replace("$", "").Replace(" ", "").Replace(" ", "");
+        if (t.Length == 0) return null;
+        return decimal.TryParse(t, NumberStyles.Number, CultureInfo.InvariantCulture, out var amount)
+            ? amount : throw new UserException("Montant invalide : écrivez par exemple 180 ou 180.00.");
+    }
+
+    private void AddFreeLine_Click(object sender, RoutedEventArgs e)
+    {
+        if (Dialogs.FreeLine(this, Categories) is not var (category, description, amount, date)) return;
+        try { _store.AddFreeLine(category, description, amount, Fmt.Iso(date)); LoadDraft(); }
+        catch (Exception ex) { Error(ex); }
+    }
+
     private void AddLine_Click(object sender, RoutedEventArgs e)
     {
         if (Dialogs.NewLine(this) is not var (entity, date, start)) return;
@@ -163,7 +221,7 @@ public partial class MainWindow : Window
 
     private void DeleteLine_Click(object sender, RoutedEventArgs e)
     {
-        if (((Button)sender).Tag is not LineRow row || !Confirm($"Retirer « {row.Entity} » de la facture en cours ?")) return;
+        if (((Button)sender).Tag is not LineRow row || !Confirm($"Retirer « {(row.IsFree ? row.Description : row.Entity)} » de la facture ?")) return;
         try { _store.DeleteLine(row.Id); LoadDraft(); } catch (Exception ex) { Error(ex); }
     }
 
@@ -214,38 +272,139 @@ public partial class MainWindow : Window
         try
         {
             var file = Path.Combine(Path.GetTempPath(), "Factures AG - apercu.pdf");
-            File.WriteAllBytes(file, InvoicePdf.Generate(_store.DraftAsInvoice(), _store.GetSettings()));
+            var date = FinalizeDate.SelectedDate is DateTime d ? Fmt.Iso(d) : null;
+            File.WriteAllBytes(file, InvoicePdf.Generate(_store.DraftAsInvoice(date, SelectedPaymentDays), _store.GetSettings(), LoadLogo()));
             OpenFile(file);
         }
         catch (Exception ex) { Error(ex); }
     }
 
+    /// <summary>Enregistre la cellule en cours de saisie (les champs s'enregistrent en quittant la case).</summary>
+    private static void CommitPendingEdit()
+    {
+        if (Keyboard.FocusedElement is TextBox box) box.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+    }
+
     private void Finalize_Click(object sender, RoutedEventArgs e)
     {
-        // Laisse d'abord la cellule en cours de saisie s'enregistrer.
-        FinalizeBtn.Focus();
+        CommitPendingEdit();
         var draft = _store.GetDraft();
         var settings = _store.GetSettings();
         var date = FinalizeDate.SelectedDate ?? DateTime.Today;
-        if (!Confirm($"Finaliser la facture n° {settings["next_number"]} datée du {date.ToString("d MMMM yyyy", Fmt.Fr)} pour {Fmt.Money(draft.Total)} ?\n\nElle ne pourra plus être modifiée.")) return;
+        var days = SelectedPaymentDays;
+        if (!Confirm($"Finaliser la facture n° {settings["next_number"]} datée du {date.ToString("d MMMM yyyy", Fmt.Fr)} pour {Fmt.Money(draft.Total)} ({Store.PaymentDaysLabel(days)}) ?\n\nVous pourrez la rouvrir plus tard depuis l'onglet Factures si besoin.")) return;
         try
         {
-            var id = _store.Finalize(Fmt.Iso(date));
+            var id = _store.Finalize(Fmt.Iso(date), days);
             var file = WritePdf(_store.GetInvoice(id));
-            FinalizeDate.SelectedDate = DateTime.Today;
             LoadDraft();
             if (Confirm($"Facture n° {_store.GetInvoice(id).Invoice.Number} finalisée.\nLe PDF est enregistré dans :\n{file}\n\nL'ouvrir maintenant ?")) OpenFile(file);
         }
         catch (Exception ex) { Error(ex); }
     }
 
+    private void SaveReopen_Click(object sender, RoutedEventArgs e)
+    {
+        CommitPendingEdit();
+        var draft = _store.GetDraft();
+        if (!draft.IsReopened) { LoadDraft(); return; }
+        var date = FinalizeDate.SelectedDate ?? DateTime.Today;
+        var days = SelectedPaymentDays;
+        var change = draft.Total == draft.OriginalTotal ? "" : $"\nTotal : {Fmt.Money(draft.OriginalTotal)} → {Fmt.Money(draft.Total)}";
+        if (!Confirm($"Enregistrer les modifications de la facture n° {draft.Number} ?{change}\n\nSon PDF sera recréé ; l'ancien est gardé dans « Versions remplacées »." +
+                     (draft.WasPaid && change.Length > 0 ? "\n\nComme son total change, elle repassera « À payer »." : ""))) return;
+        try
+        {
+            var r = _store.SaveReopened(Fmt.Iso(date), days);
+            var file = WritePdf(_store.GetInvoice(r.Id), keepPrevious: true);
+            LoadDraft();
+            var paid = r.PaymentReset ? "\n\nSon total a changé : elle est de nouveau « À payer »." : "";
+            if (Confirm($"Facture n° {r.Number} enregistrée.{paid}\n\nLe nouveau PDF est enregistré dans :\n{file}\n\nL'ouvrir maintenant ?")) OpenFile(file);
+        }
+        catch (Exception ex) { Error(ex); }
+    }
+
+    private void CancelReopen_Click(object sender, RoutedEventArgs e)
+    {
+        var draft = _store.GetDraft();
+        if (draft.IsReopened && !Confirm($"Annuler toutes les modifications de la facture n° {draft.Number} ?\nElle reviendra exactement comme avant.")) return;
+        try { _store.CancelReopen(); LoadDraft(); Notify("Modifications annulées. Votre facture du mois est de retour."); }
+        catch (Exception ex) { Error(ex); }
+    }
+
     private string PdfPath(InvoiceDetail inv) => Path.Combine(_pdfDir, InvoicePdf.FileName(inv, _store.GetSettings()));
 
-    private string WritePdf(InvoiceDetail inv)
+    /// <summary>Écrit le PDF ; avec <paramref name="keepPrevious"/>, l'ancien est déplacé dans « Versions remplacées ».</summary>
+    private string WritePdf(InvoiceDetail inv, bool keepPrevious = false)
     {
         var file = PdfPath(inv);
-        File.WriteAllBytes(file, InvoicePdf.Generate(inv, _store.GetSettings()));
+        if (keepPrevious && File.Exists(file))
+        {
+            var archive = Path.Combine(_pdfDir, "Versions remplacées");
+            Directory.CreateDirectory(archive);
+            var name = $"{Path.GetFileNameWithoutExtension(file)} (remplacée le {DateTime.Now:yyyy-MM-dd HH'h'mm}).pdf";
+            File.Move(file, Path.Combine(archive, name), overwrite: true);
+        }
+        File.WriteAllBytes(file, InvoicePdf.Generate(inv, _store.GetSettings(), LoadLogo()));
         return file;
+    }
+
+    // ---------- Logo ----------
+    private string? LogoPath() =>
+        _store.GetSettings().GetValueOrDefault("logo_file") is { Length: > 0 } name ? Path.Combine(_dataDir, name) : null;
+
+    private byte[]? LoadLogo() => LogoPath() is string p && File.Exists(p) ? File.ReadAllBytes(p) : null;
+
+    private void ShowLogo()
+    {
+        LogoPreview.Source = null;
+        if (LogoPath() is string p && File.Exists(p))
+        {
+            var img = new System.Windows.Media.Imaging.BitmapImage();
+            img.BeginInit();
+            img.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad; // ne garde pas le fichier ouvert
+            img.UriSource = new Uri(p);
+            img.EndInit();
+            LogoPreview.Source = img;
+        }
+        LogoEmpty.Visibility = LogoPreview.Source is null ? Visibility.Visible : Visibility.Collapsed;
+        RemoveLogoBtn.Visibility = LogoPreview.Source is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void ChooseLogo_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog { Filter = "Images (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg", Title = "Choisir le logo" };
+        if (dlg.ShowDialog(this) != true) return;
+        try
+        {
+            if (new FileInfo(dlg.FileName).Length > 5_000_000) throw new UserException("Image trop lourde (5 Mo au maximum).");
+            // Vérifie que l'image est lisible avant de l'adopter.
+            using (var s = File.OpenRead(dlg.FileName))
+                System.Windows.Media.Imaging.BitmapDecoder.Create(s, System.Windows.Media.Imaging.BitmapCreateOptions.None, System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+            var name = "logo" + Path.GetExtension(dlg.FileName).ToLowerInvariant();
+            if (LogoPath() is string old && File.Exists(old)) File.Delete(old);
+            File.Copy(dlg.FileName, Path.Combine(_dataDir, name), overwrite: true);
+            _store.UpdateSettings(new Dictionary<string, string> { ["logo_file"] = name });
+            ShowLogo();
+            Notify("Logo enregistré. Il apparaîtra sur les prochains PDF.");
+        }
+        catch (Exception ex) when (ex is not UserException && ex is NotSupportedException or FileFormatException or IOException)
+        {
+            Error(new UserException($"Cette image ne peut pas être lue : {ex.Message}"));
+        }
+        catch (Exception ex) { Error(ex); }
+    }
+
+    private void RemoveLogo_Click(object sender, RoutedEventArgs e)
+    {
+        if (!Confirm("Retirer le logo des prochaines factures ?")) return;
+        try
+        {
+            if (LogoPath() is string p && File.Exists(p)) File.Delete(p);
+            _store.UpdateSettings(new Dictionary<string, string> { ["logo_file"] = "" });
+            ShowLogo();
+        }
+        catch (Exception ex) { Error(ex); }
     }
 
     // ---------- Factures ----------
@@ -287,6 +446,22 @@ public partial class MainWindow : Window
                 Notify($"Paiement de la facture n° {row.Number} enregistré.");
             }
             LoadInvoices();
+        }
+        catch (Exception ex) { Error(ex); }
+    }
+
+    private void InvoiceReopen_Click(object sender, RoutedEventArgs e)
+    {
+        if (((Button)sender).Tag is not InvoiceRow row) return;
+        try
+        {
+            if (!row.IsEditing)
+            {
+                var paid = row.IsPaid ? "\n\nElle est payée : si son total change, elle repassera « À payer »." : "";
+                if (!Confirm($"Rouvrir la facture n° {row.Number} pour la modifier ?\n\nSon numéro ne change pas. Votre facture du mois est mise de côté le temps de la modification.{paid}")) return;
+                _store.Reopen(row.Summary.Id);
+            }
+            TabDraft.IsSelected = true; // affiche la facture rouverte dans l'écran de saisie
         }
         catch (Exception ex) { Error(ex); }
     }
@@ -337,14 +512,19 @@ public partial class MainWindow : Window
     {
         var s = _store.GetSettings();
         foreach (var box in SettingBoxes()) box.Text = s.GetValueOrDefault((string)box.Tag, "");
+        SettingsPaymentDays.SelectedValue = int.Parse(s["payment_days"], CultureInfo.InvariantCulture);
         RatesList.ItemsSource = _store.ListRates().Select(r => new RateRow(r)).ToList();
+        ShowLogo();
     }
 
     private void SaveSettings_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            _store.UpdateSettings(SettingBoxes().ToDictionary(b => (string)b.Tag, b => b.Text.Trim()));
+            var values = SettingBoxes().ToDictionary(b => (string)b.Tag, b => b.Text.Trim());
+            if (SettingsPaymentDays.SelectedValue is int days) values["payment_days"] = days.ToString(CultureInfo.InvariantCulture);
+            _store.UpdateSettings(values);
+            _shownInvoiceId = null; // la facture du mois reprendra le nouveau délai par défaut
             Notify("Réglages enregistrés.");
         }
         catch (Exception ex) { Error(ex); }

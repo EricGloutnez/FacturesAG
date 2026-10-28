@@ -31,10 +31,23 @@ public static class InvoicePdf
         return client.Length == 0 ? $"Facture-{inv.Invoice.Number}.pdf" : $"Facture-{inv.Invoice.Number}_{client}.pdf";
     }
 
-    public static byte[] Generate(InvoiceDetail inv, IReadOnlyDictionary<string, string> settings)
+    /// <summary>Phrase du délai de paiement, ex. « Net 15 jours : payable au plus tard le 14 décembre 2026. »</summary>
+    public static string? PaymentTermsSentence(InvoiceSummary i)
+    {
+        if (i.PaymentDays is not int d) return null;
+        if (d == 0) return "Payable sur réception.";
+        return i.DueDate is string due && i.Status != InvoiceStatus.Draft
+            ? $"Net {d} jours : payable au plus tard le {LongDate(due)}."
+            : $"Net {d} jours suivant la date de facture.";
+    }
+
+    /// <param name="logo">Image PNG ou JPEG affichée en haut de la facture ; null pour aucun logo.</param>
+    public static byte[] Generate(InvoiceDetail inv, IReadOnlyDictionary<string, string> settings, byte[]? logo = null)
     {
         var i = inv.Invoice;
         var paid = i.Status == InvoiceStatus.Paid ? i.Total : 0m;
+        var draft = i.Status == InvoiceStatus.Draft;
+        var terms = string.Join(" ", new[] { PaymentTermsSentence(i), settings.GetValueOrDefault("payment_terms") }.Where(s => !string.IsNullOrWhiteSpace(s)));
 
         return Document.Create(doc => doc.Page(page =>
         {
@@ -44,16 +57,21 @@ public static class InvoicePdf
 
             page.Header().BorderBottom(3).BorderColor(Accent).PaddingBottom(12).Row(row =>
             {
-                row.RelativeItem().AlignBottom().Text("FACTURE").FontSize(24).SemiBold().FontColor(Accent);
-                row.ConstantItem(220).Column(c =>
+                row.RelativeItem().AlignBottom().Column(c =>
+                {
+                    if (logo is { Length: > 0 }) c.Item().PaddingBottom(8).MaxHeight(70).MaxWidth(220).Image(logo).FitArea();
+                    c.Item().Text("FACTURE").FontSize(24).SemiBold().FontColor(Accent);
+                });
+                row.ConstantItem(240).AlignBottom().Column(c =>
                 {
                     void Meta(string label, string value) => c.Item().Row(r =>
                     {
                         r.RelativeItem().AlignRight().Text(label).SemiBold();
-                        r.ConstantItem(120).AlignRight().Text(value);
+                        r.ConstantItem(130).AlignRight().Text(value);
                     });
-                    Meta("Numéro :", i.Status == InvoiceStatus.Draft ? "brouillon" : i.Number.ToString(CultureInfo.InvariantCulture));
-                    Meta("Date :", i.Status == InvoiceStatus.Draft ? "—" : LongDate(i.InvoiceDate));
+                    Meta("Numéro :", draft ? "brouillon" : i.Number.ToString(CultureInfo.InvariantCulture));
+                    Meta("Date :", draft ? "—" : LongDate(i.InvoiceDate));
+                    if (!draft && i.PaymentDays is not null) Meta("Échéance :", i.PaymentDays == 0 ? "sur réception" : LongDate(i.DueDate));
                     Meta("Total :", Money(i.Total));
                 });
             });
@@ -95,7 +113,7 @@ public static class InvoicePdf
 
                 col.Item().PaddingTop(20).ShowEntire().Row(row =>
                 {
-                    row.RelativeItem().PaddingRight(30).Text(settings["payment_terms"]).FontSize(9).FontColor("#4A4A46");
+                    row.RelativeItem().PaddingRight(30).Text(terms).FontSize(9).FontColor("#4A4A46");
                     row.ConstantItem(230).Column(c =>
                     {
                         void Line(string label, string value, bool muted = false) => c.Item().PaddingVertical(2).Row(r =>
