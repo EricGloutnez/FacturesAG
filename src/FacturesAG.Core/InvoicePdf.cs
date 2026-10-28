@@ -48,6 +48,34 @@ public static class InvoicePdf
     public static IEnumerable<byte[]> GenerateImages(InvoiceDetail inv, IReadOnlyDictionary<string, string> settings, int dpi = 110) =>
         Create(inv, settings).GenerateImages(new ImageGenerationSettings { RasterDpi = dpi });
 
+    private const string AccentSoft = "#E3F1EC";
+
+    /// <summary>« 3 nov. » à partir de « 2026-11-03 ».</summary>
+    public static string ShortDate(string? iso) =>
+        DateOnly.TryParseExact(iso ?? "", "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
+            ? d.ToString("d MMM", Fr) : "";
+
+    /// <summary>« 30 novembre 2026 · échéance 15 décembre 2026 » (sous le numéro de facture).</summary>
+    public static string HeaderDates(InvoiceSummary i)
+    {
+        if (i.Status == InvoiceStatus.Draft) return "Le numéro et la date seront attribués à la finalisation";
+        var date = LongDate(i.InvoiceDate);
+        return i.PaymentDays switch
+        {
+            null => date,
+            0 => $"{date} · payable sur réception",
+            _ => $"{date} · échéance {LongDate(i.DueDate)}",
+        };
+    }
+
+    /// <summary>Lignes regroupées par catégorie, dans l'ordre où chaque catégorie apparaît, puis par date.</summary>
+    public static IEnumerable<IGrouping<string, LineView>> GroupByCategory(IEnumerable<LineView> lines) =>
+        lines.Select((l, index) => (l, index))
+             .GroupBy(x => x.l.Category)
+             .OrderBy(g => g.Min(x => x.index))
+             .Select(g => g.OrderBy(x => x.l.Date, StringComparer.Ordinal).ThenBy(x => x.index).Select(x => x.l)
+                           .GroupBy(_ => g.Key).Single());
+
     private static IDocument Create(InvoiceDetail inv, IReadOnlyDictionary<string, string> settings)
     {
         var i = inv.Invoice;
@@ -61,33 +89,22 @@ public static class InvoicePdf
             page.Margin(40);
             page.DefaultTextStyle(t => t.FontSize(10).FontColor("#1D1D1B"));
 
-            page.Header().BorderBottom(3).BorderColor(Accent).PaddingBottom(12).Row(row =>
+            // En-tête (modèle D « détaillée en colonnes ») : logo à gauche, numéro et dates à droite.
+            page.Header().BorderBottom(2).BorderColor(Accent).PaddingBottom(10).Row(row =>
             {
-                row.RelativeItem().AlignBottom().Column(c =>
+                row.RelativeItem().AlignMiddle().Row(logo =>
                 {
-                    // Logo fixe de l'application : icône vectorielle + nom et devise.
-                    c.Item().PaddingBottom(10).Row(logo =>
+                    logo.ConstantItem(40).Height(40).Svg(Brand.IconSvg);
+                    logo.AutoItem().PaddingLeft(8).AlignMiddle().Column(t =>
                     {
-                        logo.ConstantItem(44).Height(44).Svg(Brand.IconSvg);
-                        logo.AutoItem().PaddingLeft(8).AlignMiddle().Column(t =>
-                        {
-                            t.Item().Text(Brand.Name).FontSize(15).Bold().FontColor("#1D1D1B");
-                            t.Item().Text(Brand.Tagline).FontSize(7).FontColor(Muted).LetterSpacing(0.12f);
-                        });
+                        t.Item().Text(Brand.Name).FontSize(14).Bold().FontColor("#1D1D1B");
+                        t.Item().Text(Brand.Tagline).FontSize(7).FontColor(Muted).LetterSpacing(0.12f);
                     });
-                    c.Item().Text("FACTURE").FontSize(24).SemiBold().FontColor(Accent);
                 });
-                row.ConstantItem(240).AlignBottom().Column(c =>
+                row.AutoItem().AlignMiddle().Column(c =>
                 {
-                    void Meta(string label, string value) => c.Item().Row(r =>
-                    {
-                        r.RelativeItem().AlignRight().Text(label).SemiBold();
-                        r.ConstantItem(130).AlignRight().Text(value);
-                    });
-                    Meta("Numéro :", draft ? "brouillon" : i.Number.ToString(CultureInfo.InvariantCulture));
-                    Meta("Date :", draft ? "—" : LongDate(i.InvoiceDate));
-                    if (!draft && i.PaymentDays is not null) Meta("Échéance :", i.PaymentDays == 0 ? "sur réception" : LongDate(i.DueDate));
-                    Meta("Total :", Money(i.Total));
+                    c.Item().AlignRight().Text(draft ? "FACTURE — BROUILLON" : $"FACTURE N° {i.Number}").FontSize(17).Bold().FontColor(Accent);
+                    c.Item().AlignRight().Text(HeaderDates(i)).FontSize(9).FontColor(Muted);
                 });
             });
 
@@ -101,28 +118,60 @@ public static class InvoicePdf
                         c.Item().PaddingTop(3).Text(lines[0]).FontSize(11.5f).SemiBold();
                         foreach (var l in lines.Skip(1).Where(l => !string.IsNullOrWhiteSpace(l))) c.Item().Text(l);
                     });
-                    Party("Facturé par", settings["issuer_name"], settings["issuer_street"], settings["issuer_city"], settings["issuer_phone"], settings["issuer_email"]);
-                    Party("Facturé à", settings["client_name"], settings["client_street"], settings["client_city"], settings["client_email"]);
+                    Party("De", settings["issuer_name"], settings["issuer_street"], settings["issuer_city"], settings["issuer_phone"], settings["issuer_email"]);
+                    Party("À", settings["client_name"], settings["client_street"], settings["client_city"], settings["client_email"]);
                 });
 
-                col.Item().PaddingTop(22).Table(table =>
+                // Lignes regroupées par catégorie, avec date, heures et durée en colonnes, puis un sous-total par catégorie.
+                col.Item().PaddingTop(20).Table(table =>
                 {
-                    table.ColumnsDefinition(c => { c.ConstantColumn(80); c.ConstantColumn(130); c.RelativeColumn(); });
+                    table.ColumnsDefinition(c =>
+                    {
+                        c.ConstantColumn(52);   // Date
+                        c.RelativeColumn();     // Assemblée / description
+                        c.ConstantColumn(80);   // Heures
+                        c.ConstantColumn(50);   // Durée
+                        c.ConstantColumn(78);   // Montant
+                    });
                     table.Header(h =>
                     {
-                        static IContainer Head(IContainer x) => x.BorderBottom(1).BorderColor("#C9C8C1").PaddingVertical(5).PaddingHorizontal(6);
+                        static IContainer Head(IContainer x) => x.BorderBottom(1).BorderColor("#C9C8C1").PaddingVertical(5).PaddingHorizontal(5);
+                        h.Cell().Element(Head).Text("DATE").FontSize(8).FontColor(Muted);
+                        h.Cell().Element(Head).Text("ASSEMBLÉE / DESCRIPTION").FontSize(8).FontColor(Muted);
+                        h.Cell().Element(Head).Text("HEURES").FontSize(8).FontColor(Muted);
+                        h.Cell().Element(Head).AlignRight().Text("DURÉE").FontSize(8).FontColor(Muted);
                         h.Cell().Element(Head).AlignRight().Text("MONTANT").FontSize(8).FontColor(Muted);
-                        h.Cell().Element(Head).Text("CATÉGORIE").FontSize(8).FontColor(Muted);
-                        h.Cell().Element(Head).Text("DESCRIPTION").FontSize(8).FontColor(Muted);
                     });
-                    var n = 0;
-                    foreach (var l in inv.Lines)
+
+                    static IContainer Cell(IContainer x) => x.BorderBottom(0.5f).BorderColor("#ECEBE6").PaddingVertical(4).PaddingHorizontal(5);
+                    foreach (var group in GroupByCategory(inv.Lines))
                     {
-                        var bg = n++ % 2 == 1 ? "#F7F7F4" : "#FFFFFF";
-                        IContainer Cell(IContainer x) => x.Background(bg).BorderBottom(0.5f).BorderColor("#ECEBE6").PaddingVertical(5).PaddingHorizontal(6);
-                        table.Cell().Element(Cell).AlignRight().Text(l.Amount is decimal a ? Money(a) : "—");
-                        table.Cell().Element(Cell).Text(l.Category);
-                        table.Cell().Element(Cell).Text(l.Description);
+                        table.Cell().ColumnSpan(5).Background(AccentSoft).PaddingVertical(4).PaddingHorizontal(5)
+                            .Text(group.Key).SemiBold().FontColor(Accent);
+                        foreach (var l in group)
+                        {
+                            table.Cell().Element(Cell).Text(ShortDate(l.Date));
+                            if (l.IsFree)
+                            {
+                                table.Cell().ColumnSpan(3).Element(Cell).Text(l.Description);
+                            }
+                            else
+                            {
+                                table.Cell().Element(Cell).Text(l.Entity);
+                                if (!l.Quorum)
+                                    table.Cell().ColumnSpan(2).Element(Cell).Text("quorum non atteint").FontColor(Muted);
+                                else
+                                {
+                                    table.Cell().Element(Cell).Text($"{Billing.FormatHour(l.Start)}–{Billing.FormatHour(l.End)}");
+                                    table.Cell().Element(Cell).AlignRight().Text(Billing.DurationMinutes(l.Start, l.End) is int m ? Billing.FormatDuration(m) : "");
+                                }
+                            }
+                            table.Cell().Element(Cell).AlignRight().Text(l.Amount is decimal a ? Money(a) : "—");
+                        }
+                        table.Cell().ColumnSpan(4).PaddingVertical(4).PaddingHorizontal(5).AlignRight()
+                            .Text($"Sous-total · {group.Key} ({group.Count()})").FontColor(Muted);
+                        table.Cell().PaddingVertical(4).PaddingHorizontal(5).AlignRight()
+                            .Text(Money(group.Sum(l => l.Amount ?? 0m))).SemiBold();
                     }
                 });
 

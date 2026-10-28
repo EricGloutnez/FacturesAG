@@ -335,6 +335,30 @@ var tests = new List<(string Name, Action Body)>
         Eq<int?>(15, s.GetInvoice(imported.Id).Invoice.PaymentDays);
     }),
 
+    // ---------- Facture modèle D (détaillée en colonnes) ----------
+    ("facture D : dates, en-tête et regroupement par catégorie", () =>
+    {
+        Eq("3 nov.", InvoicePdf.ShortDate("2026-11-03"));
+        var inv = new InvoiceSummary(1, 120, InvoiceStatus.Final, "2026-11-30", null, null, 360m, "app", 15);
+        Eq("30 novembre 2026 · échéance 15 décembre 2026", InvoicePdf.HeaderDates(inv));
+        Eq("30 novembre 2026 · payable sur réception", InvoicePdf.HeaderDates(inv with { PaymentDays = 0 }));
+        Eq("30 novembre 2026", InvoicePdf.HeaderDates(inv with { PaymentDays = null }));
+        LineView L(long id, string cat, string date) => new(id, cat, null, date, "", "", true, null, null, 10m, $"l{id}");
+        var groups = InvoicePdf.GroupByCategory([L(1, "Virtuelle", "2026-11-05"), L(2, "Kilométrage", "2026-11-01"), L(3, "Virtuelle", "2026-11-02")]).ToList();
+        Eq("Virtuelle|Kilométrage", string.Join("|", groups.Select(g => g.Key)));       // ordre d'apparition des catégories
+        Eq("3,1", string.Join(",", groups[0].Select(l => l.Id)));                         // puis par date
+    }),
+    ("facture D : PDF généré pour une facture avec assemblées et ligne libre", () =>
+    {
+        using var s = Fresh();
+        s.AddLine("SDC A", "2026-11-03", "18:30", "20:34");
+        s.AddLine("SDC B", "2026-11-04", "18:30", "", quorum: false);
+        s.AddFreeLine("Formation", "Formation", 60m, "2026-11-10");
+        var inv = s.GetInvoice(s.Finalize("2026-11-30"));
+        True(InvoicePdf.Generate(inv, s.GetSettings()).Length > 1000, "PDF");
+        True(InvoicePdf.GenerateImages(inv, s.GetSettings(), 40).Any(), "image");
+    }),
+
     // ---------- Fiabilité des données ----------
     ("réglages : tout ou rien (une valeur invalide n'enregistre rien)", () =>
     {
