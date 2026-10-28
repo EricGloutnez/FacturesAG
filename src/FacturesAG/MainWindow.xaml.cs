@@ -273,7 +273,7 @@ public partial class MainWindow : Window
         {
             var file = Path.Combine(Path.GetTempPath(), "Factures AG - apercu.pdf");
             var date = FinalizeDate.SelectedDate is DateTime d ? Fmt.Iso(d) : null;
-            File.WriteAllBytes(file, InvoicePdf.Generate(_store.DraftAsInvoice(date, SelectedPaymentDays), _store.GetSettings(), LoadLogo()));
+            File.WriteAllBytes(file, InvoicePdf.Generate(_store.DraftAsInvoice(date, SelectedPaymentDays), _store.GetSettings()));
             OpenFile(file);
         }
         catch (Exception ex) { Error(ex); }
@@ -345,66 +345,8 @@ public partial class MainWindow : Window
             var name = $"{Path.GetFileNameWithoutExtension(file)} (remplacée le {DateTime.Now:yyyy-MM-dd HH'h'mm}).pdf";
             File.Move(file, Path.Combine(archive, name), overwrite: true);
         }
-        File.WriteAllBytes(file, InvoicePdf.Generate(inv, _store.GetSettings(), LoadLogo()));
+        File.WriteAllBytes(file, InvoicePdf.Generate(inv, _store.GetSettings()));
         return file;
-    }
-
-    // ---------- Logo ----------
-    private string? LogoPath() =>
-        _store.GetSettings().GetValueOrDefault("logo_file") is { Length: > 0 } name ? Path.Combine(_dataDir, name) : null;
-
-    private byte[]? LoadLogo() => LogoPath() is string p && File.Exists(p) ? File.ReadAllBytes(p) : null;
-
-    private void ShowLogo()
-    {
-        LogoPreview.Source = null;
-        if (LogoPath() is string p && File.Exists(p))
-        {
-            var img = new System.Windows.Media.Imaging.BitmapImage();
-            img.BeginInit();
-            img.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad; // ne garde pas le fichier ouvert
-            img.UriSource = new Uri(p);
-            img.EndInit();
-            LogoPreview.Source = img;
-        }
-        LogoEmpty.Visibility = LogoPreview.Source is null ? Visibility.Visible : Visibility.Collapsed;
-        RemoveLogoBtn.Visibility = LogoPreview.Source is null ? Visibility.Collapsed : Visibility.Visible;
-    }
-
-    private void ChooseLogo_Click(object sender, RoutedEventArgs e)
-    {
-        var dlg = new OpenFileDialog { Filter = "Images (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg", Title = "Choisir le logo" };
-        if (dlg.ShowDialog(this) != true) return;
-        try
-        {
-            if (new FileInfo(dlg.FileName).Length > 5_000_000) throw new UserException("Image trop lourde (5 Mo au maximum).");
-            // Vérifie que l'image est lisible avant de l'adopter.
-            using (var s = File.OpenRead(dlg.FileName))
-                System.Windows.Media.Imaging.BitmapDecoder.Create(s, System.Windows.Media.Imaging.BitmapCreateOptions.None, System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
-            var name = "logo" + Path.GetExtension(dlg.FileName).ToLowerInvariant();
-            if (LogoPath() is string old && File.Exists(old)) File.Delete(old);
-            File.Copy(dlg.FileName, Path.Combine(_dataDir, name), overwrite: true);
-            _store.UpdateSettings(new Dictionary<string, string> { ["logo_file"] = name });
-            ShowLogo();
-            Notify("Logo enregistré. Il apparaîtra sur les prochains PDF.");
-        }
-        catch (Exception ex) when (ex is not UserException && ex is NotSupportedException or FileFormatException or IOException)
-        {
-            Error(new UserException($"Cette image ne peut pas être lue : {ex.Message}"));
-        }
-        catch (Exception ex) { Error(ex); }
-    }
-
-    private void RemoveLogo_Click(object sender, RoutedEventArgs e)
-    {
-        if (!Confirm("Retirer le logo des prochaines factures ?")) return;
-        try
-        {
-            if (LogoPath() is string p && File.Exists(p)) File.Delete(p);
-            _store.UpdateSettings(new Dictionary<string, string> { ["logo_file"] = "" });
-            ShowLogo();
-        }
-        catch (Exception ex) { Error(ex); }
     }
 
     // ---------- Factures ----------
@@ -514,7 +456,6 @@ public partial class MainWindow : Window
         foreach (var box in SettingBoxes()) box.Text = s.GetValueOrDefault((string)box.Tag, "");
         SettingsPaymentDays.SelectedValue = int.Parse(s["payment_days"], CultureInfo.InvariantCulture);
         RatesList.ItemsSource = _store.ListRates().Select(r => new RateRow(r)).ToList();
-        ShowLogo();
     }
 
     private void SaveSettings_Click(object sender, RoutedEventArgs e)

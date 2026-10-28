@@ -41,8 +41,14 @@ public static class InvoicePdf
             : $"Net {d} jours suivant la date de facture.";
     }
 
-    /// <param name="logo">Image PNG ou JPEG affichée en haut de la facture ; null pour aucun logo.</param>
-    public static byte[] Generate(InvoiceDetail inv, IReadOnlyDictionary<string, string> settings, byte[]? logo = null)
+    public static byte[] Generate(InvoiceDetail inv, IReadOnlyDictionary<string, string> settings) =>
+        Create(inv, settings).GeneratePdf();
+
+    /// <summary>Images PNG des pages (aperçu à l'écran, vérifications).</summary>
+    public static IEnumerable<byte[]> GenerateImages(InvoiceDetail inv, IReadOnlyDictionary<string, string> settings, int dpi = 110) =>
+        Create(inv, settings).GenerateImages(new ImageGenerationSettings { RasterDpi = dpi });
+
+    private static IDocument Create(InvoiceDetail inv, IReadOnlyDictionary<string, string> settings)
     {
         var i = inv.Invoice;
         var paid = i.Status == InvoiceStatus.Paid ? i.Total : 0m;
@@ -59,7 +65,16 @@ public static class InvoicePdf
             {
                 row.RelativeItem().AlignBottom().Column(c =>
                 {
-                    if (logo is { Length: > 0 }) c.Item().PaddingBottom(8).MaxHeight(70).MaxWidth(220).Image(logo).FitArea();
+                    // Logo fixe de l'application : icône vectorielle + nom et devise.
+                    c.Item().PaddingBottom(10).Row(logo =>
+                    {
+                        logo.ConstantItem(44).Height(44).Svg(Brand.IconSvg);
+                        logo.AutoItem().PaddingLeft(8).AlignMiddle().Column(t =>
+                        {
+                            t.Item().Text(Brand.Name).FontSize(15).Bold().FontColor("#1D1D1B");
+                            t.Item().Text(Brand.Tagline).FontSize(7).FontColor(Muted).LetterSpacing(0.12f);
+                        });
+                    });
                     c.Item().Text("FACTURE").FontSize(24).SemiBold().FontColor(Accent);
                 });
                 row.ConstantItem(240).AlignBottom().Column(c =>
@@ -144,6 +159,6 @@ public static class InvoicePdf
                 r.RelativeItem().Text(settings["footer"]).FontSize(8).FontColor("#8A8A84");
                 r.AutoItem().Text(i.Status == InvoiceStatus.Draft ? "Aperçu : le numéro sera attribué à la finalisation" : $"Facture n° {i.Number}").FontSize(8).FontColor("#8A8A84");
             });
-        })).GeneratePdf();
+        }));
     }
 }

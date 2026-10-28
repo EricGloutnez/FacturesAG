@@ -29,7 +29,6 @@ public sealed class Store : IDisposable
         ["payment_days"] = "15",
         ["footer"] = "Merci de votre confiance.",
         ["next_number"] = "1",
-        ["logo_file"] = "",
     };
 
     public const string DefaultPaymentTerms = "Paiement par virement Interac, par chèque ou comptant.";

@@ -7,8 +7,7 @@ livrée en un seul fichier `Factures AG.exe`, sans installation.
 ## Premier lancement
 
 Dans **Réglages** :
-1. Entrez vos coordonnées, celles du client, le délai de paiement par défaut, le prochain numéro de facture
-   et, si vous voulez, votre logo (PNG ou JPEG).
+1. Entrez vos coordonnées, celles du client, le délai de paiement par défaut, le prochain numéro de facture.
 2. Ajoutez votre taux horaire dans la **grille de tarifs** (date d'entrée en vigueur, taux, minimum d'heures).
 3. Facultatif : importez votre historique depuis Finance D (export JSON : Options → Mon dossier →
    Exporter mes enregistrements au format JSON). Le prochain numéro est ajusté automatiquement.
@@ -20,7 +19,7 @@ Dans **Réglages** :
    n'est pas atteint (minimum facturé). Tapez un montant pour le forcer, effacez-le pour revenir au calcul.
    « + Ligne libre » ajoute une ligne à montant fixe (formation, per diem, kilométrage…).
 2. **Finaliser** : choisissez la date et le délai de paiement (Net 0, Net 15 ou Net 30) ; la facture reçoit son numéro,
-   ses montants sont figés et le PDF est enregistré (avec votre logo et la date d'échéance).
+   ses montants sont figés et le PDF est enregistré (avec le logo Factures AG et la date d'échéance).
 3. **Factures** : ouvrir le PDF, marquer payée (date et mode de paiement), voir l'échéance (« En retard » si dépassée).
    **Rouvrir** permet de modifier une facture finalisée, y compris une facture importée : son numéro ne change pas,
    la facture du mois est mise de côté le temps de la modification, « Annuler les modifications » la remet exactement
@@ -91,3 +90,9 @@ migration déjà publiée.
 - [QuestPDF](https://www.questpdf.com/license/) : licence Community, gratuite pour les particuliers et les entreprises
   dont le revenu annuel brut est inférieur à 1 M$ US.
 - [Microsoft.Data.Sqlite](https://github.com/dotnet/efcore) : MIT.
+
+## Logo
+
+Le logo « facture et horloge » est intégré à l'application (en-tête des factures, fenêtre et icône du `.exe`) et
+n'est pas modifiable depuis l'application. Source : `assets/logo-icone.svg` ; l'icône Windows
+`src/FacturesAG/Assets/app.ico` se régénère avec `assets/generer-icone.ps1`.
