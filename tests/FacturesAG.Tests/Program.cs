@@ -439,6 +439,65 @@ var tests = new List<(string Name, Action Body)>
         finally { dir.Delete(true); }
     }),
 
+    // ---------- Emplacement des données ----------
+    ("emplacement : par défaut, choisi, retour au défaut", () =>
+    {
+        var dir = Directory.CreateTempSubdirectory("fag-test-");
+        try
+        {
+            var def = Path.Combine(dir.FullName, "defaut");
+            Eq<string?>(null, DataLocation.ReadCustom(def));
+            DataLocation.SetCustom(def, Path.Combine(dir.FullName, "iCloud", "Factures"));
+            Eq(Path.Combine(dir.FullName, "iCloud", "Factures"), DataLocation.ReadCustom(def));
+            True(DataLocation.IsCloudFolder(DataLocation.ReadCustom(def)!), "dossier synchronisé détecté");
+            DataLocation.SetCustom(def, def);
+            Eq<string?>(null, DataLocation.ReadCustom(def));
+            False(File.Exists(DataLocation.PointerFile(def)));
+        }
+        finally { dir.Delete(true); }
+    }),
+    ("emplacement : copie de la base, des PDF et sauvegardes ; base existante mise de côté", () =>
+    {
+        var dir = Directory.CreateTempSubdirectory("fag-test-");
+        try
+        {
+            var src = Path.Combine(dir.FullName, "source");
+            Directory.CreateDirectory(Path.Combine(src, "Factures"));
+            File.WriteAllText(Path.Combine(src, "Factures", "Facture-120.pdf"), "pdf");
+            var target = Path.Combine(dir.FullName, "cible");
+            using (var s = new Store(Path.Combine(src, DataLocation.DatabaseName), Path.Combine(src, "Sauvegardes")))
+            {
+                s.UpdateSettings(new Dictionary<string, string> { ["next_number"] = "120", ["issuer_name"] = "Moi" });
+                s.DailyBackup();
+                // Une ancienne base est déjà dans la cible
+                Directory.CreateDirectory(target);
+                using (var old = new Store(Path.Combine(target, DataLocation.DatabaseName))) old.UpdateSettings(new Dictionary<string, string> { ["next_number"] = "5" });
+                ClearPools();
+                Eq("5", DataLocation.Describe(target)!.Value.NextNumber);
+                DataLocation.CopyData(s, src, target);
+            }
+            ClearPools();
+            Eq("120", DataLocation.Describe(target)!.Value.NextNumber);
+            True(File.Exists(Path.Combine(target, "Factures", "Facture-120.pdf")), "PDF copiés");
+            True(Directory.GetFiles(Path.Combine(target, "Sauvegardes"), "*-quotidienne.db").Length == 1, "sauvegardes copiées");
+            True(Directory.GetFiles(Path.Combine(target, "Sauvegardes"), "*-remplacee.db").Length == 1, "ancienne base mise de côté");
+            True(File.Exists(Path.Combine(src, DataLocation.DatabaseName)), "rien n'est supprimé à l'origine");
+            using (var copy = new Store(Path.Combine(target, DataLocation.DatabaseName))) Eq("Moi", copy.GetSettings()["issuer_name"]);
+        }
+        finally { ClearPools(); dir.Delete(true); }
+    }),
+    ("emplacement : dossier impossible à écrire refusé avec un message clair", () =>
+    {
+        var dir = Directory.CreateTempSubdirectory("fag-test-");
+        try
+        {
+            var file = Path.Combine(dir.FullName, "un-fichier");
+            File.WriteAllText(file, "x");
+            Throws<UserException>(() => DataLocation.EnsureWritable(Path.Combine(file, "sous-dossier")), "ne peut pas écrire");
+        }
+        finally { dir.Delete(true); }
+    }),
+
     // ---------- Installation ----------
     ("installation : dossier, détection du .exe téléchargé", () =>
     {

@@ -507,6 +507,79 @@ public partial class MainWindow : Window
     private void OpenPdfFolder_Click(object sender, RoutedEventArgs e) => OpenFile(_pdfDir);
     private void OpenDataFolder_Click(object sender, RoutedEventArgs e) => OpenFile(_dataDir);
 
+    // ---------- Emplacement des données ----------
+    private void ShowDataLocation()
+    {
+        var custom = AppRuntime.CustomDataDir is not null;
+        DataPathNote.Text = custom
+            ? "Dossier choisi par vous." + (DataLocation.IsCloudFolder(_dataDir) ? " Il est synchronisé en ligne : n'ouvrez Factures AG que sur un seul ordinateur à la fois." : "")
+            : "Dossier par défaut.";
+        DefaultDataFolderBtn.Visibility = custom ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ChangeDataFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFolderDialog { Title = "Choisir le dossier de vos données Factures AG", InitialDirectory = _dataDir };
+        if (dlg.ShowDialog(this) != true) return;
+        MoveDataTo(dlg.FolderName);
+    }
+
+    private void DefaultDataFolder_Click(object sender, RoutedEventArgs e) => MoveDataTo(AppRuntime.DefaultDataDir);
+
+    /// <summary>
+    /// Change le dossier des données : vérifications, copie de vos données (jamais de suppression), puis redémarrage.
+    /// Si le dossier contient déjà des données Factures AG, vous choisissez lesquelles garder.
+    /// </summary>
+    private void MoveDataTo(string target)
+    {
+        try
+        {
+            target = Path.GetFullPath(target);
+            if (DataLocation.SamePath(target, _dataDir)) { Notify("C'est déjà le dossier de vos données."); return; }
+            if (!SaveSettingsIfNeeded()) return;
+            DataLocation.EnsureWritable(target);
+            if (AppRuntime.IsRedirected(target))
+                throw new UserException("Ce dossier est une copie privée d'une autre application : choisissez-en un autre.");
+
+            var copy = true;
+            if (DataLocation.Describe(target) is { } there)
+            {
+                var invoices = there.Invoices < 0 ? "illisible" : $"{there.Invoices} facture(s), prochain numéro {there.NextNumber}";
+                var answer = MessageBox.Show(this,
+                    $"Ce dossier contient déjà des données Factures AG :\n{invoices}, modifiées le {there.Modified:d MMMM yyyy à HH:mm}.\n\n" +
+                    $"Vos données actuelles : {_store.ListInvoices().Count} facture(s), prochain numéro {_store.GetSettings()["next_number"]}.\n\n" +
+                    "Oui : les remplacer par vos données actuelles (l'ancienne base est gardée dans ses Sauvegardes).\n" +
+                    "Non : utiliser les données déjà présentes dans ce dossier.",
+                    "Factures AG", MessageBoxButton.YesNoCancel, MessageBoxImage.Question, MessageBoxResult.Cancel);
+                if (answer == MessageBoxResult.Cancel) return;
+                copy = answer == MessageBoxResult.Yes;
+            }
+            else if (!Confirm($"Copier vos données dans :\n{target}\n\nFactures AG utilisera ensuite ce dossier et redémarrera. " +
+                              $"Rien n'est supprimé dans le dossier actuel :\n{_dataDir}" +
+                              (DataLocation.IsCloudFolder(target) ? "\n\nCe dossier est synchronisé en ligne : n'ouvrez Factures AG que sur un seul ordinateur à la fois." : "")))
+                return;
+
+            CommitPendingEdit();
+            if (copy) DataLocation.CopyData(_store, _dataDir, target);
+            DataLocation.SetCustom(AppRuntime.DefaultDataDir, target);
+            MessageBox.Show(this, $"Vos données sont maintenant dans :\n{target}\n\nFactures AG va redémarrer.", "Factures AG",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            if (Environment.ProcessPath is string exe)
+                Process.Start(new ProcessStartInfo(exe) { UseShellExecute = false, ArgumentList = { UpdateFlow.RestartArgument } });
+            Application.Current.Shutdown();
+        }
+        catch (Exception ex) { Error(ex); }
+    }
+
+    /// <summary>Avant de changer de dossier : propose d'enregistrer les réglages modifiés ; faux si l'utilisateur annule.</summary>
+    private bool SaveSettingsIfNeeded()
+    {
+        if (!IsSettingsDirty()) return true;
+        var answer = MessageBox.Show(this, "Des réglages ont été modifiés sans être enregistrés.\n\nLes enregistrer d'abord ?", "Factures AG",
+            MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+        return answer == MessageBoxResult.No || (answer == MessageBoxResult.Yes && SaveSettings());
+    }
+
     // ---------- État des résultats ----------
     private bool _loadingReport;
 
@@ -573,6 +646,7 @@ public partial class MainWindow : Window
         foreach (var box in SettingBoxes()) box.Text = s.GetValueOrDefault((string)box.Tag, "");
         SettingsPaymentDays.SelectedValue = int.Parse(s["payment_days"], CultureInfo.InvariantCulture);
         RefreshRates();
+        ShowDataLocation();
         _settingsSnapshot = SettingsFormValues();
     }
 

@@ -13,11 +13,17 @@ public static class AppRuntime
     /// <summary>Données d'essai : FACTURES_AG_DATA désigne un autre dossier que les vraies données.</summary>
     public static bool IsTestData => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("FACTURES_AG_DATA"));
 
-    /// <summary>Dossier des données : AppData\Local\Factures AG (jamais bloqué par Windows Defender), ou le dossier d'essai.</summary>
-    public static string DataDir =>
+    /// <summary>Dossier par défaut : AppData\Local\Factures AG (jamais bloqué par Windows Defender), ou le dossier d'essai.</summary>
+    public static string DefaultDataDir =>
         Environment.GetEnvironmentVariable("FACTURES_AG_DATA") is { Length: > 0 } test
             ? Path.GetFullPath(test)
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Factures AG");
+
+    /// <summary>Dossier choisi dans les Réglages (« Changer de dossier »), ou null.</summary>
+    public static string? CustomDataDir => FacturesAG.Core.DataLocation.ReadCustom(DefaultDataDir);
+
+    /// <summary>Dossier des données utilisé : celui choisi dans les Réglages, sinon le dossier par défaut.</summary>
+    public static string DataDir => CustomDataDir ?? DefaultDataDir;
 
     public static string WindowTitle => IsTestData ? "Factures AG — ESSAI (données de test)" : "Factures AG";
 

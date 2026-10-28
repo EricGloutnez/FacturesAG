@@ -106,6 +106,19 @@ public sealed class Store : IDisposable
         return file;
     }
 
+    /// <summary>Copie complète et cohérente de la base ouverte vers <paramref name="file"/> (remplacé s'il existe).</summary>
+    public void CopyDatabaseTo(string file)
+    {
+        var temp = file + ".copie";
+        if (File.Exists(temp)) File.Delete(temp);
+        using (var dest = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = temp, Pooling = false }.ToString()))
+        {
+            dest.Open();
+            _db.BackupDatabase(dest);
+        }
+        File.Move(temp, file, overwrite: true);
+    }
+
     /// <summary>
     /// Sauvegarde quotidienne : une copie par jour (la première ouverture du jour), en gardant les
     /// <paramref name="keep"/> plus récentes. Retourne le fichier créé, ou null s'il y en avait déjà une aujourd'hui.

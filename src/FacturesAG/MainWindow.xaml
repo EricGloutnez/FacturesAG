@@ -410,9 +410,14 @@
           <Border Style="{StaticResource Card}">
             <StackPanel>
               <TextBlock Text="Vos données" Style="{StaticResource H2}"/>
-              <TextBlock Style="{StaticResource Help}" Margin="0,0,0,10" Text="Base de données, PDF des factures et sauvegardes automatiques (faites avant chaque mise à jour de la structure des données). Pour une sauvegarde complète, copiez ce dossier."/>
-              <TextBlock x:Name="DataPath" FontFamily="Consolas" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,10"/>
-              <Button Content="Ouvrir le dossier" HorizontalAlignment="Left" Click="OpenDataFolder_Click"/>
+              <TextBlock Style="{StaticResource Help}" Margin="0,0,0,10" Text="Base de données, PDF des factures et sauvegardes automatiques (une par jour, et avant chaque import ou changement de structure). Pour une sauvegarde complète, copiez ce dossier."/>
+              <TextBlock x:Name="DataPath" FontFamily="Consolas" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,4"/>
+              <TextBlock x:Name="DataPathNote" Style="{StaticResource Help}" Margin="0,0,0,10"/>
+              <StackPanel Orientation="Horizontal">
+                <Button Content="Ouvrir le dossier" Click="OpenDataFolder_Click" Margin="0,0,8,0"/>
+                <Button Content="Changer de dossier…" Click="ChangeDataFolder_Click" Margin="0,0,8,0"/>
+                <Button x:Name="DefaultDataFolderBtn" Content="Revenir au dossier par défaut" Style="{StaticResource Ghost}" Click="DefaultDataFolder_Click"/>
+              </StackPanel>
               <TextBlock x:Name="VersionText" Style="{StaticResource Help}" Margin="0,14,0,0"/>
             </StackPanel>
           </Border>

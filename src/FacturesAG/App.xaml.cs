@@ -20,6 +20,20 @@ public partial class App : Application
 
         try
         {
+            // Dossier choisi introuvable (disque débranché, iCloud ou OneDrive indisponible…) : on n'ouvre surtout pas
+            // une base vide à la place, ce qui ferait croire que les données ont disparu. Vérifié en premier,
+            // avant toute action qui pourrait créer ce dossier.
+            if (AppRuntime.CustomDataDir is string custom && !File.Exists(Path.Combine(custom, DataLocation.DatabaseName)))
+            {
+                var answer = MessageBox.Show(
+                    $"Le dossier de vos données est introuvable ou vide :\n{custom}\n\n" +
+                    "Vérifiez que le disque est branché (ou qu'iCloud / OneDrive est disponible), puis relancez Factures AG.\n\n" +
+                    "Voulez-vous plutôt revenir au dossier par défaut ?\n(Oui : dossier par défaut, avec les données qui s'y trouvent, peut-être plus anciennes.  Non : quitter.)",
+                    "Factures AG", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+                if (answer != MessageBoxResult.Yes) { Shutdown(1); return; }
+                DataLocation.SetCustom(AppRuntime.DefaultDataDir, null);
+            }
+
             // Lancée depuis certaines applications (« empaquetées »), Factures AG verrait une copie séparée, vide,
             // de ses données. On vérifie où se trouve réellement le dossier des données avant d'y toucher.
             if (DataDirIsRedirected())

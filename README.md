@@ -70,6 +70,16 @@ Avant tout changement de structure de la base (migration), une copie est enregis
 Ce dossier est utilisé plutôt que Documents parce que la protection « Accès contrôlé aux dossiers » de Windows
 Defender bloque les programmes inconnus qui écrivent dans Documents ou sur le Bureau.
 
+### Changer de dossier
+
+Réglages → Vos données → **Changer de dossier…** : vos données (base, PDF, sauvegardes) sont **copiées** dans le dossier
+choisi (rien n'est supprimé à l'ancien endroit), puis l'application redémarre sur ce dossier. Le choix est noté dans
+`%LOCALAPPDATA%\Factures AG\emplacement-donnees.txt`. Un dossier où Windows interdit d'écrire (Documents ou Bureau
+protégés par Defender) est refusé. Si le dossier choisi contient déjà des données, vous choisissez lesquelles garder
+(l'autre base est mise de côté). Si le dossier choisi devient introuvable (disque débranché, iCloud/OneDrive
+indisponible), l'application refuse de s'ouvrir plutôt que de démarrer sur une base vide. Dossier synchronisé en
+ligne : n'ouvrir Factures AG que sur un seul ordinateur à la fois.
+
 ### Protections
 
 - **Sauvegardes automatiques** dans `Sauvegardes\` : une par jour (les 30 derniers jours), une avant chaque import
