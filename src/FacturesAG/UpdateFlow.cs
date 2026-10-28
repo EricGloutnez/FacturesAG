@@ -20,15 +20,21 @@ public static class UpdateFlow
 
     private static string? ExePath => Environment.ProcessPath;
 
-    /// <summary>Vrai pour le .exe publié (Release) ; faux en développement (Debug).</summary>
+    /// <summary>Argument passé à la nouvelle version après une mise à jour (elle attend que l'ancienne se ferme).</summary>
+    public const string RestartArgument = "--apres-maj";
+
+    /// <summary>
+    /// Vrai seulement pour le .exe officiel compilé par GitHub Actions (OfficialBuild=true) :
+    /// une compilation locale ne s'installe pas et ne se met pas à jour.
+    /// </summary>
     private static bool IsReleaseExe
     {
         get
         {
-#if DEBUG
-            return false;
-#else
+#if OFFICIAL_BUILD
             return ExePath is string p && p.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
+#else
+            return false;
 #endif
         }
     }
@@ -44,10 +50,11 @@ public static class UpdateFlow
     /// lance la copie installée et retourne vrai (cette copie-ci doit alors se fermer).
     /// En cas d'échec, prévient et retourne faux : l'application s'ouvre quand même, sans installation.
     /// </summary>
-    public static bool InstallIfDownloaded()
+    public static bool InstallIfDownloaded(string[] args)
     {
         if (!IsInstallEnabled || ExePath is not string exe) return false;
-        if (!Installer.ShouldInstall(exe)) return false;
+        // La copie installée ne se réinstalle jamais (évite toute boucle).
+        if (args.Contains(Installer.InstalledArgument) || !Installer.ShouldInstall(exe)) return false;
         string target;
         try
         {
@@ -64,7 +71,13 @@ public static class UpdateFlow
         catch (Exception) { shortcutsOk = false; } // l'application installée fonctionne quand même
         var start = new ProcessStartInfo(target) { UseShellExecute = false, ArgumentList = { Installer.InstalledArgument } };
         if (!shortcutsOk) start.ArgumentList.Add("--sans-raccourci");
-        Process.Start(start);
+        try { Process.Start(start); }
+        catch (Exception e)
+        {
+            MessageBox.Show($"Factures AG est installé, mais la copie installée n'a pas pu démarrer :\n{e.Message}\n\nL'application va s'ouvrir quand même.",
+                "Factures AG", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
         return true;
     }
 
@@ -96,9 +109,9 @@ public static class UpdateFlow
             using var cts = new CancellationTokenSource(timeout);
             return await Updater.CheckAsync(http, CurrentVersion, cts.Token);
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
+        catch (Exception)
         {
-            return null;
+            return null; // pas d'Internet, réponse inattendue… : l'application s'ouvre et vérifiera plus tard
         }
     }
 
@@ -122,11 +135,19 @@ public static class UpdateFlow
         {
             using var http = Updater.CreateHttpClient();
             await Updater.DownloadAsync(http, update, download, progress);
+            // Le fichier doit vraiment être la version annoncée (sinon : mises à jour sans fin).
+            if (Installer.VersionOf(download) != update.Version)
+                throw new UserException($"Le fichier publié ne correspond pas à la version {update.Version}. Réessayez plus tard.");
             Updater.Swap(exe, download);
         }
         catch (UnauthorizedAccessException)
         {
-            throw new UserException($"Factures AG n'a pas le droit de se mettre à jour dans ce dossier :\n{Path.GetDirectoryName(exe)}\n\nDéplacez « {Path.GetFileName(exe)} » dans un dossier personnel (par exemple Documents ou le Bureau), puis relancez-le.");
+            throw new UserException($"Factures AG n'a pas le droit de se mettre à jour dans ce dossier :\n{Path.GetDirectoryName(exe)}\n\n" +
+                "Lancez Factures AG depuis son raccourci « Factures AG » (Bureau ou menu Démarrer) : la copie installée peut se mettre à jour.");
+        }
+        catch (IOException e) when (e is not FileNotFoundException)
+        {
+            throw new UserException("Une autre copie de Factures AG utilise encore le programme. Fermez toutes les fenêtres Factures AG, puis réessayez.");
         }
         catch (HttpRequestException)
         {
@@ -136,7 +157,7 @@ public static class UpdateFlow
         {
             try { if (File.Exists(download)) File.Delete(download); } catch (IOException) { }
         }
-        Process.Start(new ProcessStartInfo(exe) { UseShellExecute = false });
+        Process.Start(new ProcessStartInfo(exe) { UseShellExecute = false, ArgumentList = { RestartArgument } });
     }
 }
 

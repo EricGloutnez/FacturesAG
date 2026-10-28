@@ -335,6 +335,86 @@ var tests = new List<(string Name, Action Body)>
         Eq<int?>(15, s.GetInvoice(imported.Id).Invoice.PaymentDays);
     }),
 
+    // ---------- Fiabilité des données ----------
+    ("réglages : tout ou rien (une valeur invalide n'enregistre rien)", () =>
+    {
+        using var s = Fresh();
+        s.UpdateSettings(new Dictionary<string, string> { ["issuer_name"] = "Avant" });
+        Throws<UserException>(() => s.UpdateSettings(new Dictionary<string, string> { ["issuer_name"] = "Après", ["next_number"] = "abc" }), "nombre entier");
+        Eq("Avant", s.GetSettings()["issuer_name"]);
+        Throws<UserException>(() => s.UpdateSettings(new Dictionary<string, string> { ["next_number"] = "99999999999" }), "nombre entier");
+        Throws<UserException>(() => s.UpdateSettings(new Dictionary<string, string> { ["next_number"] = "0" }), "nombre entier");
+    }),
+    ("réglages : détecte les champs remplis qui seraient effacés", () =>
+    {
+        using var s = Fresh();
+        s.UpdateSettings(new Dictionary<string, string> { ["issuer_name"] = "Moi", ["issuer_phone"] = "" });
+        var cleared = s.SettingsThatWouldBeCleared(new Dictionary<string, string> { ["issuer_name"] = "", ["issuer_phone"] = "", ["client_name"] = "Client Test" });
+        Eq("issuer_name", string.Join(",", cleared));
+    }),
+    ("sauvegarde quotidienne : une par jour, 30 gardées, et avant un import", () =>
+    {
+        var dir = Directory.CreateTempSubdirectory("fag-test-");
+        try
+        {
+            var backups = Path.Combine(dir.FullName, "Sauvegardes");
+            Directory.CreateDirectory(backups);
+            for (var i = 1; i <= 35; i++) File.WriteAllText(Path.Combine(backups, $"factures-ag-2025{i:0000}-120000-quotidienne.db"), "x");
+            using (var s = new Store(Path.Combine(dir.FullName, "base.db"), backups))
+            {
+                True(s.DailyBackup() is not null, "sauvegarde du jour créée");
+                Eq<string?>(null, s.DailyBackup()); // pas deux fois le même jour
+                Eq(30, Directory.GetFiles(backups, "*-quotidienne.db").Length);
+                True(File.Exists(Directory.GetFiles(backups, $"factures-ag-{DateTime.Now:yyyyMMdd}-*-quotidienne.db").Single()), "la plus récente est gardée");
+                s.ImportFinanceD(Sample.FinanceD);
+                Eq(1, Directory.GetFiles(backups, "*-avant-import.db").Length);
+            }
+        }
+        finally { ClearPools(); dir.Delete(true); }
+    }),
+    ("montants arrondis au cent : le total est la somme des lignes", () =>
+    {
+        using var s = new Store(":memory:");
+        s.AddRate("2025-01-01", 47.25m, 1.5m);
+        s.AddLine("SDC A", "2026-11-03", "18:30", "", quorum: false);
+        s.AddLine("SDC B", "2026-11-04", "18:30", "", quorum: false);
+        var d = s.GetDraft();
+        Eq<decimal?>(70.88m, d.Lines[0].Amount);
+        Eq(141.76m, d.Total);
+    }),
+    ("durée inhabituelle signalée (faute de frappe probable)", () =>
+    {
+        using var s = Fresh();
+        s.AddLine("SDC A", "2026-11-03", "18:30", "08:30");
+        var l = s.GetDraft().Lines[0];
+        True(l.IsUnusual, "14 h signalées");
+        True(l.Detail.Contains("vérifiez"), "message");
+        s.UpdateLine(l.Id, end: "20:30");
+        False(s.GetDraft().Lines[0].IsUnusual);
+    }),
+
+    ("remplacement du .exe même si un ancien « .old » est encore verrouillé", () =>
+    {
+        var dir = Directory.CreateTempSubdirectory("fag-test-");
+        try
+        {
+            var current = Path.Combine(dir.FullName, "Factures AG.exe");
+            File.WriteAllText(current, "v2");
+            File.WriteAllText(current + ".old", "v1");
+            var update = Path.Combine(dir.FullName, "telechargement.exe");
+            File.WriteAllText(update, "v3");
+            using (File.Open(current + ".old", FileMode.Open, FileAccess.Read, FileShare.None)) // ancienne copie encore ouverte
+            {
+                Updater.Swap(current, update);
+            }
+            Eq("v3", File.ReadAllText(current));
+            Eq(2, Directory.GetFiles(dir.FullName, "Factures AG.exe.old*").Length);
+            Updater.CleanupOld(current);
+            Eq(0, Directory.GetFiles(dir.FullName, "Factures AG.exe.old*").Length);
+        }
+        finally { dir.Delete(true); }
+    }),
+
     // ---------- Installation ----------
     ("installation : dossier, détection du .exe téléchargé", () =>
     {

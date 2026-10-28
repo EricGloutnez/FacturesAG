@@ -39,7 +39,18 @@ public sealed class LineRow : Observable
     public LineView View => _view;
 
     public string Entity { get => _entity; set { if (value == _entity) return; _entity = value; Save(this, nameof(Entity)); } }
-    public DateTime? Date { get => _date; set { if (value == _date || value is null) return; _date = value; Save(this, nameof(Date)); } }
+    public DateTime? Date
+    {
+        get => _date;
+        set
+        {
+            if (value == _date) return;
+            // Une date effacée n'est pas enregistrée : on réaffiche aussitôt celle qui est dans la base.
+            if (value is null) { System.Windows.Application.Current.Dispatcher.BeginInvoke(() => Apply(_view)); return; }
+            _date = value;
+            Save(this, nameof(Date));
+        }
+    }
     public string Start { get => _start; set { if (value == _start) return; _start = value; Save(this, nameof(Start)); } }
     public string End { get => _end; set { if (value == _end) return; _end = value; Save(this, nameof(End)); } }
     public bool Quorum { get => _quorum; set { if (value == _quorum) return; _quorum = value; Save(this, nameof(Quorum)); } }

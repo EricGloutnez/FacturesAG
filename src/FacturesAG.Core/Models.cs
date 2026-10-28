@@ -13,7 +13,11 @@ public sealed record LineView(
     public bool IsFree => Entity is null;
 
     public string Detail => IsFree ? "" : !Quorum ? "Quorum non atteint · minimum facturé"
-        : Billing.DurationMinutes(Start, End) is int m ? Billing.FormatDuration(m) : "Heure de fin à saisir";
+        : Billing.DurationMinutes(Start, End) is int m
+            ? Billing.FormatDuration(m) + (m > Billing.UnusualMinutes ? " · durée inhabituelle : vérifiez l'heure de fin" : "")
+            : "Heure de fin à saisir";
+
+    public bool IsUnusual => !IsFree && Quorum && Billing.DurationMinutes(Start, End) is int m && m > Billing.UnusualMinutes;
 }
 
 /// <summary>

@@ -29,6 +29,8 @@
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <DebugType>embedded</DebugType>
+    <!-- Seul le .exe officiel (GitHub Actions : -p:OfficialBuild=true) s'installe et se met à jour -->
+    <DefineConstants Condition="'$(OfficialBuild)' == 'true'">$(DefineConstants);OFFICIAL_BUILD</DefineConstants>
   </PropertyGroup>
 
 </Project>

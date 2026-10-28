@@ -69,7 +69,25 @@ Avant tout changement de structure de la base (migration), une copie est enregis
 
 Ce dossier est utilisé plutôt que Documents parce que la protection « Accès contrôlé aux dossiers » de Windows
 Defender bloque les programmes inconnus qui écrivent dans Documents ou sur le Bureau.
-La variable d'environnement `FACTURES_AG_DATA` permet d'utiliser un autre dossier (essais).
+
+### Protections
+
+- **Sauvegardes automatiques** dans `Sauvegardes\` : une par jour (les 30 derniers jours), une avant chaque import
+  Finance D et une avant chaque changement de structure de la base.
+- **Réglages** : enregistrés tout ou rien ; effacer un champ rempli demande confirmation ; quitter l'onglet avec des
+  modifications non enregistrées propose de les enregistrer.
+- **Une seule copie ouverte à la fois** : relancer l'application ramène la fenêtre déjà ouverte.
+- **Copie privée d'une autre application** : lancée depuis une application « empaquetée », Windows peut rediriger
+  `AppData` vers une copie séparée (vide). Factures AG le détecte (emplacement réel du dossier) et refuse de démarrer.
+- **Mises à jour** : jamais au milieu d'une saisie (bandeau « Mettre à jour maintenant », sinon installation après
+  2 minutes sans saisie) ; toujours obligatoires au démarrage. Seul le `.exe` officiel (GitHub Actions,
+  `-p:OfficialBuild=true`) s'installe et se met à jour.
+
+### Essais
+
+`FACTURES_AG_DATA` désigne un autre dossier de données : la fenêtre affiche alors un bandeau rouge
+« DONNÉES D'ESSAI ». `FACTURES_AG_INSTALL_DIR` et `FACTURES_AG_SHORTCUT_DIR` redirigent l'installation et les raccourcis ;
+`FACTURES_AG_NO_UPDATE=1` et `FACTURES_AG_NO_INSTALL=1` désactivent mise à jour et installation.
 
 ## Développement
 

@@ -24,9 +24,11 @@ public partial class MainWindow : Window
         InitializeComponent();
         // Données dans AppData\Local\Factures AG : dossier personnel que Windows Defender (« Accès contrôlé aux dossiers »)
         // ne bloque jamais, contrairement à Documents ou au Bureau. Modifiable avec FACTURES_AG_DATA (essais).
-        _dataDir = Environment.GetEnvironmentVariable("FACTURES_AG_DATA")
-                   ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Factures AG");
+        _dataDir = AppRuntime.DataDir;
         _pdfDir = Path.Combine(_dataDir, "Factures");
+        Title = AppRuntime.WindowTitle;
+        TestBanner.Visibility = AppRuntime.IsTestData ? Visibility.Visible : Visibility.Collapsed;
+        TestBannerText.Text = $"DONNÉES D'ESSAI — ce ne sont pas vos vraies factures ({_dataDir})";
         try { Directory.CreateDirectory(_pdfDir); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -34,7 +36,14 @@ public partial class MainWindow : Window
         }
         // Une copie de la base est faite dans Sauvegardes avant chaque changement de structure.
         _store = new Store(Path.Combine(_dataDir, "factures-ag.db"), Path.Combine(_dataDir, "Sauvegardes"));
+        // Et une copie chaque jour (les 30 derniers jours sont gardés).
+        try { _store.DailyBackup(); }
+        catch (Exception e) { Dispatcher.BeginInvoke(() => Notify($"Sauvegarde du jour impossible : {e.Message}")); }
+        // En fermant, la case en cours de saisie est d'abord enregistrée.
+        Closing += (_, _) => CommitPendingEdit();
         Closed += (_, _) => _store.Dispose();
+        PreviewKeyDown += (_, _) => _lastInput = DateTime.Now;
+        PreviewMouseDown += (_, _) => _lastInput = DateTime.Now;
 
         LinesList.ItemsSource = _lines;
         DataContext = this;
@@ -45,12 +54,17 @@ public partial class MainWindow : Window
         VersionText.Text = $"Version {UpdateFlow.CurrentVersion} · mises à jour automatiques et obligatoires";
         LoadDraft();
 
-        // Si l'application reste ouverte longtemps, une nouvelle version est quand même installée.
+        // Si l'application reste ouverte longtemps, une nouvelle version est quand même installée,
+        // mais jamais au milieu d'une saisie (voir TryApplyPendingUpdate).
         _updateTimer.Tick += async (_, _) => await CheckForUpdateWhileRunningAsync();
         _updateTimer.Start();
+        _pendingUpdateTimer.Tick += (_, _) => TryApplyPendingUpdate();
     }
 
     private readonly DispatcherTimer _updateTimer = new() { Interval = TimeSpan.FromHours(4) };
+    private readonly DispatcherTimer _pendingUpdateTimer = new() { Interval = TimeSpan.FromMinutes(1) };
+    private UpdateInfo? _pendingUpdate;
+    private DateTime _lastInput = DateTime.Now;
 
     public sealed record PaymentChoice(int Days, string Label);
 
@@ -62,13 +76,31 @@ public partial class MainWindow : Window
 
     private async Task CheckForUpdateWhileRunningAsync()
     {
-        if (await UpdateFlow.CheckQuietlyAsync(TimeSpan.FromSeconds(30)) is not { } update) return;
-        _updateTimer.Stop();
-        // Enregistre la saisie en cours (les champs s'enregistrent en quittant la case).
-        if (Keyboard.FocusedElement is TextBox box) box.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
-        UpdateFlow.InstallAndRestart(update, this);
+        if (_pendingUpdate is not null || await UpdateFlow.CheckQuietlyAsync(TimeSpan.FromSeconds(30)) is not { } update) return;
+        _pendingUpdate = update;
+        UpdateBannerText.Text = $"La version {update.Version} est prête. Elle s'installera dès que vous ne serez plus en train de saisir (l'application redémarrera).";
+        UpdateBanner.Visibility = Visibility.Visible;
+        _pendingUpdateTimer.Start();
+    }
+
+    /// <summary>
+    /// Installe la mise à jour en attente seulement à un moment sûr : aucune fenêtre ouverte, aucun réglage
+    /// non enregistré, rien de collé en attente, et 2 minutes sans saisie.
+    /// </summary>
+    private void TryApplyPendingUpdate(bool now = false)
+    {
+        if (_pendingUpdate is null) return;
+        var busy = OwnedWindows.Count > 0 || IsSettingsDirty() || !string.IsNullOrWhiteSpace(PasteText.Text)
+                   || DateTime.Now - _lastInput < TimeSpan.FromMinutes(2);
+        if (busy && !now) return;
+        if (now && IsSettingsDirty() && !Confirm("Des réglages ne sont pas enregistrés et seraient perdus. Continuer la mise à jour ?")) return;
+        _pendingUpdateTimer.Stop();
+        CommitPendingEdit();
+        UpdateFlow.InstallAndRestart(_pendingUpdate, this);
         Application.Current.Shutdown(); // redémarrage lancé, ou « Quitter » après un échec
     }
+
+    private void UpdateNow_Click(object sender, RoutedEventArgs e) => TryApplyPendingUpdate(now: true);
 
     // ---------- Outils ----------
     private void Notify(string message)
@@ -90,9 +122,27 @@ public partial class MainWindow : Window
 
     private static void OpenFile(string path) => Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
 
+    private TabItem? _currentTab;
+    private bool _switchingBack;
+
     private void Tabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (e.Source != Tabs || ViewDraft is null) return;
+        if (e.Source != Tabs || ViewDraft is null || _switchingBack) return;
+        // Quitter les Réglages avec des modifications non enregistrées : on demande, on ne perd rien en silence.
+        if (_currentTab == TabSettings && !TabSettings.IsSelected && IsSettingsDirty())
+        {
+            var answer = MessageBox.Show(this, "Des réglages ont été modifiés sans être enregistrés.\n\nLes enregistrer maintenant ?",
+                "Factures AG", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+            if (answer == MessageBoxResult.Cancel || (answer == MessageBoxResult.Yes && !SaveSettings()))
+            {
+                _switchingBack = true;
+                TabSettings.IsSelected = true;
+                _switchingBack = false;
+                return;
+            }
+            _settingsSnapshot = null; // « Non » : modifications abandonnées volontairement
+        }
+        _currentTab = Tabs.SelectedItem as TabItem;
         ViewDraft.Visibility = TabDraft.IsSelected ? Visibility.Visible : Visibility.Collapsed;
         ViewInvoices.Visibility = TabInvoices.IsSelected ? Visibility.Visible : Visibility.Collapsed;
         ViewReport.Visibility = TabReport.IsSelected ? Visibility.Visible : Visibility.Collapsed;
@@ -293,14 +343,27 @@ public partial class MainWindow : Window
         var date = FinalizeDate.SelectedDate ?? DateTime.Today;
         var days = SelectedPaymentDays;
         if (!Confirm($"Finaliser la facture n° {settings["next_number"]} datée du {date.ToString("d MMMM yyyy", Fmt.Fr)} pour {Fmt.Money(draft.Total)} ({Store.PaymentDaysLabel(days)}) ?\n\nVous pourrez la rouvrir plus tard depuis l'onglet Factures si besoin.")) return;
-        try
+        long id;
+        try { id = _store.Finalize(Fmt.Iso(date), days); }
+        catch (Exception ex) { Error(ex); return; }
+        // La facture est enregistrée : l'écran est rafraîchi même si le PDF échoue ensuite.
+        LoadDraft();
+        var number = _store.GetInvoice(id).Invoice.Number;
+        if (TryWritePdf(_store.GetInvoice(id), keepPrevious: false, out var file)
+            && Confirm($"Facture n° {number} finalisée.\nLe PDF est enregistré dans :\n{file}\n\nL'ouvrir maintenant ?")) OpenFile(file);
+    }
+
+    /// <summary>Crée le PDF ; en cas d'échec, explique que la facture est bien enregistrée et comment recréer le PDF.</summary>
+    private bool TryWritePdf(InvoiceDetail inv, bool keepPrevious, out string file)
+    {
+        try { file = WritePdf(inv, keepPrevious); return true; }
+        catch (Exception ex)
         {
-            var id = _store.Finalize(Fmt.Iso(date), days);
-            var file = WritePdf(_store.GetInvoice(id));
-            LoadDraft();
-            if (Confirm($"Facture n° {_store.GetInvoice(id).Invoice.Number} finalisée.\nLe PDF est enregistré dans :\n{file}\n\nL'ouvrir maintenant ?")) OpenFile(file);
+            file = "";
+            Error(new UserException($"La facture n° {inv.Invoice.Number} est bien enregistrée, mais son PDF n'a pas pu être créé :\n{ex.Message}\n\n" +
+                                    "Fermez le PDF s'il est ouvert dans un autre programme, puis cliquez sur « PDF » dans l'onglet Factures."));
+            return false;
         }
-        catch (Exception ex) { Error(ex); }
     }
 
     private void SaveReopen_Click(object sender, RoutedEventArgs e)
@@ -313,15 +376,15 @@ public partial class MainWindow : Window
         var change = draft.Total == draft.OriginalTotal ? "" : $"\nTotal : {Fmt.Money(draft.OriginalTotal)} → {Fmt.Money(draft.Total)}";
         if (!Confirm($"Enregistrer les modifications de la facture n° {draft.Number} ?{change}\n\nSon PDF sera recréé ; l'ancien est gardé dans « Versions remplacées »." +
                      (draft.WasPaid && change.Length > 0 ? "\n\nComme son total change, elle repassera « À payer »." : ""))) return;
-        try
-        {
-            var r = _store.SaveReopened(Fmt.Iso(date), days);
-            var file = WritePdf(_store.GetInvoice(r.Id), keepPrevious: true);
-            LoadDraft();
-            var paid = r.PaymentReset ? "\n\nSon total a changé : elle est de nouveau « À payer »." : "";
-            if (Confirm($"Facture n° {r.Number} enregistrée.{paid}\n\nLe nouveau PDF est enregistré dans :\n{file}\n\nL'ouvrir maintenant ?")) OpenFile(file);
-        }
-        catch (Exception ex) { Error(ex); }
+        ReopenSaveResult r;
+        try { r = _store.SaveReopened(Fmt.Iso(date), days); }
+        catch (Exception ex) { Error(ex); return; }
+        // Les modifications sont enregistrées : l'écran revient à la facture du mois même si le PDF échoue.
+        LoadDraft();
+        var paid = r.PaymentReset ? "\n\nSon total a changé : elle est de nouveau « À payer »." : "";
+        if (TryWritePdf(_store.GetInvoice(r.Id), keepPrevious: true, out var file)
+            && Confirm($"Facture n° {r.Number} enregistrée.{paid}\n\nLe nouveau PDF est enregistré dans :\n{file}\n\nL'ouvrir maintenant ?")) OpenFile(file);
+        else if (paid.Length > 0) Notify(paid.Trim());
     }
 
     private void CancelReopen_Click(object sender, RoutedEventArgs e)
@@ -332,20 +395,48 @@ public partial class MainWindow : Window
         catch (Exception ex) { Error(ex); }
     }
 
-    private string PdfPath(InvoiceDetail inv) => Path.Combine(_pdfDir, InvoicePdf.FileName(inv, _store.GetSettings()));
+    /// <summary>
+    /// Fichier PDF de la facture : celui qui existe déjà pour ce numéro (même si le nom du client a changé depuis),
+    /// sinon le nom habituel.
+    /// </summary>
+    private string PdfPath(InvoiceDetail inv)
+    {
+        var n = inv.Invoice.Number.ToString(CultureInfo.InvariantCulture);
+        var existing = Directory.Exists(_pdfDir)
+            ? Directory.GetFiles(_pdfDir, $"Facture-{n}*.pdf").FirstOrDefault(f =>
+                Path.GetFileNameWithoutExtension(f) is var name && (name == $"Facture-{n}" || name.StartsWith($"Facture-{n}_", StringComparison.Ordinal)))
+            : null;
+        return existing ?? Path.Combine(_pdfDir, InvoicePdf.FileName(inv, _store.GetSettings()));
+    }
 
-    /// <summary>Écrit le PDF ; avec <paramref name="keepPrevious"/>, l'ancien est déplacé dans « Versions remplacées ».</summary>
+    /// <summary>
+    /// Écrit le PDF : il est d'abord créé dans un fichier temporaire, puis mis en place, pour ne jamais laisser
+    /// un PDF à moitié écrit. Avec <paramref name="keepPrevious"/>, l'ancien est gardé dans « Versions remplacées ».
+    /// </summary>
     private string WritePdf(InvoiceDetail inv, bool keepPrevious = false)
     {
         var file = PdfPath(inv);
-        if (keepPrevious && File.Exists(file))
+        var temp = file + ".tmp";
+        File.WriteAllBytes(temp, InvoicePdf.Generate(inv, _store.GetSettings()));
+        try
         {
-            var archive = Path.Combine(_pdfDir, "Versions remplacées");
-            Directory.CreateDirectory(archive);
-            var name = $"{Path.GetFileNameWithoutExtension(file)} (remplacée le {DateTime.Now:yyyy-MM-dd HH'h'mm}).pdf";
-            File.Move(file, Path.Combine(archive, name), overwrite: true);
+            if (keepPrevious && File.Exists(file))
+            {
+                var archive = Path.Combine(_pdfDir, "Versions remplacées");
+                Directory.CreateDirectory(archive);
+                var name = $"{Path.GetFileNameWithoutExtension(file)} (remplacée le {DateTime.Now:yyyy-MM-dd HH'h'mm'm'ss}).pdf";
+                File.Copy(file, Path.Combine(archive, name), overwrite: true);
+            }
+            File.Move(temp, file, overwrite: true);
         }
-        File.WriteAllBytes(file, InvoicePdf.Generate(inv, _store.GetSettings()));
+        catch (IOException) when (File.Exists(file))
+        {
+            throw new UserException($"Le fichier « {Path.GetFileName(file)} » est ouvert dans un autre programme (lecteur PDF).");
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch (IOException) { }
+        }
         return file;
     }
 
@@ -363,9 +454,10 @@ public partial class MainWindow : Window
         if (((Button)sender).Tag is not InvoiceRow row) return;
         try
         {
+            // Le PDF est recréé à chaque ouverture : il correspond toujours à la facture enregistrée.
             var inv = _store.GetInvoice(row.Summary.Id);
-            var file = PdfPath(inv);
-            if (!File.Exists(file)) { WritePdf(inv); LoadInvoices(); }
+            var file = WritePdf(inv);
+            if (!row.PdfLabel.Equals("PDF", StringComparison.Ordinal)) LoadInvoices();
             OpenFile(file);
         }
         catch (Exception ex) { Error(ex); }
@@ -450,25 +542,57 @@ public partial class MainWindow : Window
         }
     }
 
+    private static readonly Dictionary<string, string> SettingLabels = new()
+    {
+        ["issuer_name"] = "Votre nom", ["issuer_phone"] = "Votre téléphone", ["issuer_email"] = "Votre courriel",
+        ["issuer_street"] = "Votre adresse", ["issuer_city"] = "Votre ville", ["client_name"] = "Nom du client",
+        ["client_email"] = "Courriel du client", ["client_street"] = "Adresse du client", ["client_city"] = "Ville du client",
+        ["payment_terms"] = "Modes de paiement", ["footer"] = "Message de bas de page", ["next_number"] = "Prochain numéro",
+    };
+
+    /// <summary>Valeurs affichées au chargement des Réglages ; null quand le formulaire n'est pas chargé.</summary>
+    private Dictionary<string, string>? _settingsSnapshot;
+
+    private Dictionary<string, string> SettingsFormValues()
+    {
+        var values = SettingBoxes().ToDictionary(b => (string)b.Tag, b => b.Text.Trim());
+        if (SettingsPaymentDays.SelectedValue is int days) values["payment_days"] = days.ToString(CultureInfo.InvariantCulture);
+        return values;
+    }
+
+    private bool IsSettingsDirty() =>
+        _settingsSnapshot is not null && SettingsFormValues().Any(kv => _settingsSnapshot.GetValueOrDefault(kv.Key, "") != kv.Value);
+
     private void LoadSettings()
     {
         var s = _store.GetSettings();
         foreach (var box in SettingBoxes()) box.Text = s.GetValueOrDefault((string)box.Tag, "");
         SettingsPaymentDays.SelectedValue = int.Parse(s["payment_days"], CultureInfo.InvariantCulture);
-        RatesList.ItemsSource = _store.ListRates().Select(r => new RateRow(r)).ToList();
+        RefreshRates();
+        _settingsSnapshot = SettingsFormValues();
     }
 
-    private void SaveSettings_Click(object sender, RoutedEventArgs e)
+    private void RefreshRates() => RatesList.ItemsSource = _store.ListRates().Select(r => new RateRow(r)).ToList();
+
+    private void SaveSettings_Click(object sender, RoutedEventArgs e) => SaveSettings();
+
+    /// <summary>Enregistre le formulaire (tout ou rien). Demande confirmation avant d'effacer un champ rempli.</summary>
+    private bool SaveSettings()
     {
         try
         {
-            var values = SettingBoxes().ToDictionary(b => (string)b.Tag, b => b.Text.Trim());
-            if (SettingsPaymentDays.SelectedValue is int days) values["payment_days"] = days.ToString(CultureInfo.InvariantCulture);
+            var values = SettingsFormValues();
+            var cleared = _store.SettingsThatWouldBeCleared(values);
+            if (cleared.Count > 0 && !Confirm("Ces informations seront effacées :\n\n• " +
+                    string.Join("\n• ", cleared.Select(k => SettingLabels.GetValueOrDefault(k, k))) + "\n\nContinuer ?"))
+                return false;
             _store.UpdateSettings(values);
+            _settingsSnapshot = SettingsFormValues();
             _shownInvoiceId = null; // la facture du mois reprendra le nouveau délai par défaut
             Notify("Réglages enregistrés.");
+            return true;
         }
-        catch (Exception ex) { Error(ex); }
+        catch (Exception ex) { Error(ex); return false; }
     }
 
     private void AddRate_Click(object sender, RoutedEventArgs e)
@@ -480,7 +604,7 @@ public partial class MainWindow : Window
             if (!decimal.TryParse(RateMin.Text.Replace(',', '.'), NumberStyles.Number, CultureInfo.InvariantCulture, out var min)) throw new UserException("Minimum d'heures invalide.");
             _store.AddRate(Fmt.Iso(from), hourly, min);
             RateHourly.Text = "";
-            LoadSettings();
+            RefreshRates(); // seulement la grille : les réglages en cours de saisie restent intacts
             Notify("Taux ajouté. Il s'applique aux assemblées à partir de cette date.");
         }
         catch (Exception ex) { Error(ex); }
@@ -489,7 +613,7 @@ public partial class MainWindow : Window
     private void DeleteRate_Click(object sender, RoutedEventArgs e)
     {
         if (((Button)sender).Tag is not RateRow row || !Confirm($"Supprimer le taux en vigueur depuis le {row.From} ?\nLes factures déjà finalisées ne changent pas.")) return;
-        try { _store.DeleteRate(row.Rate.Id); LoadSettings(); } catch (Exception ex) { Error(ex); }
+        try { _store.DeleteRate(row.Rate.Id); RefreshRates(); } catch (Exception ex) { Error(ex); }
     }
 
     private void ImportFinanceD_Click(object sender, RoutedEventArgs e)
@@ -499,8 +623,11 @@ public partial class MainWindow : Window
         try
         {
             var r = _store.ImportFinanceD(File.ReadAllText(dlg.FileName));
-            LoadSettings();
-            Notify($"{r.Imported} facture(s) importée(s), {r.Skipped} ignorée(s).");
+            // L'import peut avancer le prochain numéro : on ne met à jour que ce champ.
+            var next = _store.GetSettings()["next_number"];
+            if (SettingBoxes().FirstOrDefault(b => (string)b.Tag == "next_number") is { } box) box.Text = next;
+            if (_settingsSnapshot is not null) _settingsSnapshot["next_number"] = next;
+            Notify($"{r.Imported} facture(s) importée(s), {r.Skipped} ignorée(s). Une copie de sécurité a été faite avant l'import.");
         }
         catch (Exception ex) { Error(ex); }
     }

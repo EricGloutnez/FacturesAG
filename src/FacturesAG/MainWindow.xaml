@@ -33,6 +33,19 @@
       </StackPanel>
     </Border>
 
+    <!-- Mode essai : impossible à confondre avec les vraies données -->
+    <Border x:Name="TestBanner" DockPanel.Dock="Top" Background="#B42318" Padding="24,8" Visibility="Collapsed">
+      <TextBlock x:Name="TestBannerText" Foreground="White" FontWeight="SemiBold" TextWrapping="Wrap"/>
+    </Border>
+
+    <!-- Mise à jour prête : installée dès que possible, jamais au milieu d'une saisie -->
+    <Border x:Name="UpdateBanner" DockPanel.Dock="Top" Background="{StaticResource AccentSoft}" Padding="24,8" Visibility="Collapsed">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Content="Mettre à jour maintenant" Style="{StaticResource Primary}" Padding="12,5" Click="UpdateNow_Click"/>
+        <TextBlock x:Name="UpdateBannerText" Foreground="{StaticResource Accent}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,16,0"/>
+      </DockPanel>
+    </Border>
+
     <!-- Message en bas -->
     <Border x:Name="Toast" DockPanel.Dock="Bottom" Visibility="Collapsed" Background="{StaticResource Text}" Padding="16,10">
       <DockPanel>

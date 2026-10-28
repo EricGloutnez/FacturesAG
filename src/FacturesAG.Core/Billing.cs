@@ -44,10 +44,16 @@ public static partial class Billing
     public static decimal? ComputeAmount(string date, string? start, string? end, bool quorum, IEnumerable<Rate> rates)
     {
         if (RateFor(date, rates) is not Rate rate) return null;
-        if (!quorum) return rate.MinHours * rate.HourlyRate;
+        if (!quorum) return Cents(rate.MinHours * rate.HourlyRate);
         if (DurationMinutes(start, end) is not int minutes) return null;
-        return BilledHours(minutes, rate.MinHours) * rate.HourlyRate;
+        return Cents(BilledHours(minutes, rate.MinHours) * rate.HourlyRate);
     }
+
+    /// <summary>Arrondi au cent : le total d'une facture est toujours la somme exacte de ses lignes.</summary>
+    private static decimal Cents(decimal amount) => Math.Round(amount, 2, MidpointRounding.AwayFromZero);
+
+    /// <summary>Au-delà, la durée est probablement une faute de frappe (ex. 08:30 au lieu de 20:30).</summary>
+    public const int UnusualMinutes = 6 * 60;
 
     /// <summary>
     /// Accepte « 20:34 », « 20h34 », « 2034 », « 834 », « 20h » ou « 20 ».

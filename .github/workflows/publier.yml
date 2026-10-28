@@ -5,7 +5,8 @@ name: Publier une version
 
 on:
   push:
-    tags: ['v*.*.*']
+    # Versions finales seulement (pas de suffixe comme -beta), les seules que les applications installent
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
 
 permissions:
   contents: write
@@ -31,7 +32,7 @@ jobs:
       - name: Compiler le .exe
         shell: bash
         run: |
-          dotnet publish src/FacturesAG -c Release -o publish -p:Version=${{ steps.v.outputs.version }}
+          dotnet publish src/FacturesAG -c Release -o publish -p:Version=${{ steps.v.outputs.version }} -p:OfficialBuild=true
           mv "publish/Factures AG.exe" "publish/FacturesAG-${{ steps.v.outputs.version }}-win-x64.exe"
 
       # Créée en brouillon, puis rendue publique une fois le .exe téléversé :

@@ -127,7 +127,9 @@ public static partial class Updater
     public static void Swap(string currentExe, string newExe)
     {
         var old = currentExe + ".old";
-        if (File.Exists(old)) File.Delete(old);
+        // Une ancienne version encore ouverte verrouille son fichier « .old » : on en prend un autre.
+        try { if (File.Exists(old)) File.Delete(old); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { old = $"{currentExe}.old{DateTime.Now:yyyyMMddHHmmss}"; }
         File.Move(currentExe, old);
         try { File.Move(newExe, currentExe); }
         catch
@@ -140,8 +142,12 @@ public static partial class Updater
     /// <summary>Supprime l'ancienne version laissée par une mise à jour (sans erreur si elle est encore verrouillée).</summary>
     public static void CleanupOld(string currentExe)
     {
-        try { if (File.Exists(currentExe + ".old")) File.Delete(currentExe + ".old"); }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        var dir = Path.GetDirectoryName(Path.GetFullPath(currentExe))!;
+        foreach (var old in Directory.GetFiles(dir, Path.GetFileName(currentExe) + ".old*"))
+        {
+            try { File.Delete(old); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 }

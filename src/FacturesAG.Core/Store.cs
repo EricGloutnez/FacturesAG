@@ -106,6 +106,29 @@ public sealed class Store : IDisposable
         return file;
     }
 
+    /// <summary>
+    /// Sauvegarde quotidienne : une copie par jour (la première ouverture du jour), en gardant les
+    /// <paramref name="keep"/> plus récentes. Retourne le fichier créé, ou null s'il y en avait déjà une aujourd'hui.
+    /// </summary>
+    public string? DailyBackup(int keep = 30)
+    {
+        if (_backupDir is null) return null;
+        Directory.CreateDirectory(_backupDir);
+        var daily = Directory.GetFiles(_backupDir, "factures-ag-*-quotidienne.db").OrderBy(f => f, StringComparer.Ordinal).ToList();
+        var today = $"factures-ag-{DateTime.Now:yyyyMMdd}-";
+        string? created = null;
+        if (!daily.Any(f => Path.GetFileName(f).StartsWith(today, StringComparison.Ordinal)))
+        {
+            created = Backup("quotidienne")!;
+            daily.Add(created);
+        }
+        foreach (var old in daily.OrderBy(f => f, StringComparer.Ordinal).SkipLast(keep))
+        {
+            try { File.Delete(old); } catch (IOException) { }
+        }
+        return created;
+    }
+
     public void Dispose() => _db.Dispose();
 
     // ---------- Accès SQL ----------
@@ -184,16 +207,39 @@ public sealed class Store : IDisposable
     public Dictionary<string, string> GetSettings() =>
         Query("SELECT key, value FROM settings", r => (Key: (string)r["key"], Value: (string)r["value"])).ToDictionary(x => x.Key, x => x.Value);
 
+    /// <summary>
+    /// Enregistre les réglages : tout est validé d'abord, puis écrit d'un seul coup (tout ou rien).
+    /// Seules les valeurs qui changent sont écrites.
+    /// </summary>
     public void UpdateSettings(IDictionary<string, string> patch)
     {
-        foreach (var (k, v) in patch)
+        var changes = new List<(string Key, string Value)>();
+        var current = GetSettings();
+        foreach (var (k, raw) in patch)
         {
             if (!DefaultSettings.ContainsKey(k)) continue;
-            if (k == "next_number" && !Regex.IsMatch(v ?? "", @"^\d+$")) throw new UserException("Le prochain numéro de facture doit être un nombre entier.");
+            var v = raw ?? "";
+            if (k == "next_number" && !(int.TryParse(v, NumberStyles.None, CultureInfo.InvariantCulture, out var n) && n >= 1 && n < 1_000_000_000))
+                throw new UserException("Le prochain numéro de facture doit être un nombre entier positif.");
             if (k == "payment_days" && !(int.TryParse(v, out var days) && PaymentDayChoices.Contains(days)))
                 throw new UserException("Délai de paiement invalide : choisissez Net 0, Net 15 ou Net 30.");
-            Exec("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", k, v ?? "");
+            if (!current.TryGetValue(k, out var old) || old != v) changes.Add((k, v));
         }
+        InTransaction(() =>
+        {
+            foreach (var (k, v) in changes)
+                Exec("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", k, v);
+            return 0;
+        });
+    }
+
+    /// <summary>Clés dont la valeur remplie serait effacée par <paramref name="patch"/> (pour demander confirmation).</summary>
+    public List<string> SettingsThatWouldBeCleared(IDictionary<string, string> patch)
+    {
+        var current = GetSettings();
+        return patch.Where(p => DefaultSettings.ContainsKey(p.Key) && string.IsNullOrWhiteSpace(p.Value)
+                                && current.TryGetValue(p.Key, out var old) && !string.IsNullOrWhiteSpace(old))
+                    .Select(p => p.Key).ToList();
     }
 
     public List<Rate> ListRates() =>
@@ -541,6 +587,7 @@ public sealed class Store : IDisposable
         }
         catch (JsonException) { throw new UserException("Ce fichier n'est pas un JSON valide."); }
 
+        Backup("avant-import");
         return InTransaction(() =>
         {
             int imported = 0, skipped = 0;
