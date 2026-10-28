@@ -2,7 +2,21 @@
 
 Facturation simple, pour un travailleur autonome, des assemblées de copropriété animées en virtuel
 et listées dans [ag-connect](https://ag-connect.com). Application Windows (WPF, .NET 10),
-livrée en un seul fichier `Factures AG.exe`, sans installation.
+livrée en un seul fichier `.exe`.
+
+## Installation
+
+Téléchargez `FacturesAG-x.y.z-win-x64.exe` depuis les [Releases](https://github.com/EricGloutnez/FacturesAG/releases)
+et lancez-le. Au premier lancement, l'application **s'installe d'elle-même** (sans droits d'administrateur)
+dans `%LOCALAPPDATA%\Programs\FacturesAG` et crée un raccourci **« Factures AG »** sur le Bureau et dans le menu
+Démarrer. Le fichier téléchargé peut ensuite être supprimé. Une version déjà installée plus récente n'est jamais
+remplacée par un vieux téléchargement.
+
+Pour désinstaller : supprimez le dossier `%LOCALAPPDATA%\Programs\FacturesAG` et les deux raccourcis
+(vos données restent dans `%LOCALAPPDATA%\Factures AG`).
+
+> Au premier lancement, Windows SmartScreen peut afficher « Windows a protégé votre ordinateur » (fichier non signé) :
+> cliquez sur **Informations complémentaires → Exécuter quand même**.
 
 ## Premier lancement
 
@@ -41,9 +55,9 @@ publiée sur GitHub. Si elle est plus récente, elle est téléchargée, vérifi
 GitHub), installée à la place du `.exe`, puis l'application redémarre. Il n'est pas possible de la reporter : en cas
 d'échec, seuls « Réessayer » et « Quitter » sont proposés. Sans Internet, l'application s'ouvre normalement.
 
-Le `.exe` doit se trouver dans un dossier où vous avez le droit d'écrire (Documents, Bureau…), pas dans
-`Program Files`. Les mises à jour sont désactivées dans les versions de développement (Debug) ou avec la variable
-d'environnement `FACTURES_AG_NO_UPDATE=1`.
+L'application installée se trouve dans un dossier où elle a le droit d'écrire, ce qui permet ces mises à jour.
+Les mises à jour sont désactivées dans les versions de développement (Debug) ou avec la variable
+d'environnement `FACTURES_AG_NO_UPDATE=1` ; l'installation, avec `FACTURES_AG_NO_INSTALL=1`.
 
 Avant tout changement de structure de la base (migration), une copie est enregistrée dans
 `%LOCALAPPDATA%\Factures AG\Sauvegardes\`.

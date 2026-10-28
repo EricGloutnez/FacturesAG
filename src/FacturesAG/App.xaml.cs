@@ -14,8 +14,16 @@ public partial class App : Application
         };
         base.OnStartup(e);
 
-        // Mise à jour obligatoire avant d'ouvrir l'application.
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
+        // Premier lancement du fichier téléchargé : installation, raccourcis, puis la copie installée prend le relais.
+        if (UpdateFlow.InstallIfDownloaded())
+        {
+            Shutdown();
+            return;
+        }
+
+        // Mise à jour obligatoire avant d'ouvrir l'application.
         UpdateFlow.CleanupPreviousVersion();
         if (await UpdateFlow.CheckQuietlyAsync(TimeSpan.FromSeconds(8)) is { } update)
         {
@@ -36,5 +44,6 @@ public partial class App : Application
         MainWindow = main;
         ShutdownMode = ShutdownMode.OnMainWindowClose;
         main.Show();
+        UpdateFlow.WelcomeAfterInstall(main, e.Args);
     }
 }

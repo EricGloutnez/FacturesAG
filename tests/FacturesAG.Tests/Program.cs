@@ -335,6 +335,54 @@ var tests = new List<(string Name, Action Body)>
         Eq<int?>(15, s.GetInvoice(imported.Id).Invoice.PaymentDays);
     }),
 
+    // ---------- Installation ----------
+    ("installation : dossier, détection du .exe téléchargé", () =>
+    {
+        var dir = @"C:\Users\x\AppData\Local\Programs\FacturesAG";
+        Eq(@"C:\Users\x\AppData\Local\Programs\FacturesAG\Factures AG.exe", Installer.InstalledExe(dir));
+        False(Installer.ShouldInstall(@"c:\users\X\AppData\Local\Programs\FacturesAG\Factures AG.exe", dir));
+        True(Installer.ShouldInstall(@"C:\Users\x\Downloads\FacturesAG-0.4.0-win-x64.exe", dir), "téléchargé");
+    }),
+    ("installation : copie, remplace une vieille copie, garde une copie plus récente", () =>
+    {
+        var tmp = Directory.CreateTempSubdirectory("fag-test-");
+        try
+        {
+            var downloaded = Path.Combine(tmp.FullName, "Downloads", "FacturesAG-0.4.0-win-x64.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(downloaded)!);
+            File.WriteAllText(downloaded, "nouveau");
+            var installDir = Path.Combine(tmp.FullName, "Programs", "FacturesAG");
+            var target = Installer.Install(downloaded, new Version(0, 4, 0), null, installDir);
+            Eq(Path.Combine(installDir, "Factures AG.exe"), target);
+            Eq("nouveau", File.ReadAllText(target));
+            File.WriteAllText(target, "ancien");
+            Installer.Install(downloaded, new Version(0, 4, 0), new Version(0, 3, 1), installDir);
+            Eq("nouveau", File.ReadAllText(target));
+            File.WriteAllText(target, "plus récent");
+            Installer.Install(downloaded, new Version(0, 4, 0), new Version(0, 5, 0), installDir);
+            Eq("plus récent", File.ReadAllText(target));
+        }
+        finally { tmp.Delete(true); }
+    }),
+    ("raccourcis : script (apostrophes) et création réelle avec PowerShell", () =>
+    {
+        var script = Installer.ShortcutScript(@"C:\Users\d'Arcy\AppData\Local\Programs\FacturesAG\Factures AG.exe");
+        True(script.Contains(@"'C:\Users\d''Arcy\AppData\Local\Programs\FacturesAG\Factures AG.exe'"), "apostrophe échappée");
+        True(script.Contains("GetFolderPath('Desktop')") && script.Contains("GetFolderPath('Programs')"), "Bureau et menu Démarrer");
+        True(script.Contains("'Factures AG.lnk'"), "nom du raccourci");
+        var tmp = Directory.CreateTempSubdirectory("fag-test-");
+        try
+        {
+            var target = Path.Combine(tmp.FullName, "Factures AG.exe");
+            File.WriteAllText(target, "x");
+            var links = Path.Combine(tmp.FullName, "Raccourcis");
+            Environment.SetEnvironmentVariable("FACTURES_AG_SHORTCUT_DIR", links);
+            Installer.CreateShortcuts(target);
+            True(File.Exists(Path.Combine(links, "Factures AG.lnk")), "raccourci créé");
+        }
+        finally { Environment.SetEnvironmentVariable("FACTURES_AG_SHORTCUT_DIR", null); tmp.Delete(true); }
+    }),
+
     // ---------- Migrations de la base ----------
     ("base neuve : structure à jour", () =>
     {

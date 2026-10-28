@@ -20,18 +20,65 @@ public static class UpdateFlow
 
     private static string? ExePath => Environment.ProcessPath;
 
-    /// <summary>Désactivé en développement (Debug) ou avec la variable FACTURES_AG_NO_UPDATE=1.</summary>
-    public static bool IsEnabled
+    /// <summary>Vrai pour le .exe publié (Release) ; faux en développement (Debug).</summary>
+    private static bool IsReleaseExe
     {
         get
         {
 #if DEBUG
             return false;
 #else
-            return Environment.GetEnvironmentVariable("FACTURES_AG_NO_UPDATE") != "1"
-                   && ExePath is string p && p.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
+            return ExePath is string p && p.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
 #endif
         }
+    }
+
+    /// <summary>Mises à jour : désactivées en développement ou avec la variable FACTURES_AG_NO_UPDATE=1.</summary>
+    public static bool IsEnabled => IsReleaseExe && Environment.GetEnvironmentVariable("FACTURES_AG_NO_UPDATE") != "1";
+
+    /// <summary>Installation : désactivée en développement ou avec la variable FACTURES_AG_NO_INSTALL=1.</summary>
+    private static bool IsInstallEnabled => IsReleaseExe && Environment.GetEnvironmentVariable("FACTURES_AG_NO_INSTALL") != "1";
+
+    /// <summary>
+    /// Premier lancement du .exe téléchargé : l'installe dans AppData\Local\Programs\FacturesAG, crée les raccourcis,
+    /// lance la copie installée et retourne vrai (cette copie-ci doit alors se fermer).
+    /// En cas d'échec, prévient et retourne faux : l'application s'ouvre quand même, sans installation.
+    /// </summary>
+    public static bool InstallIfDownloaded()
+    {
+        if (!IsInstallEnabled || ExePath is not string exe) return false;
+        if (!Installer.ShouldInstall(exe)) return false;
+        string target;
+        try
+        {
+            target = Installer.Install(exe, CurrentVersion, Installer.VersionOf(Installer.InstalledExe()));
+        }
+        catch (Exception e)
+        {
+            MessageBox.Show($"Installation impossible :\n{e.Message}\n\nL'application va s'ouvrir quand même, sans raccourci.",
+                "Factures AG", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+        var shortcutsOk = true;
+        try { Installer.CreateShortcuts(target); }
+        catch (Exception) { shortcutsOk = false; } // l'application installée fonctionne quand même
+        var start = new ProcessStartInfo(target) { UseShellExecute = false, ArgumentList = { Installer.InstalledArgument } };
+        if (!shortcutsOk) start.ArgumentList.Add("--sans-raccourci");
+        Process.Start(start);
+        return true;
+    }
+
+    /// <summary>Message affiché par la copie installée juste après l'installation.</summary>
+    public static void WelcomeAfterInstall(Window owner, string[] args)
+    {
+        if (!args.Contains(Installer.InstalledArgument)) return;
+        var shortcuts = args.Contains("--sans-raccourci")
+            ? "Les raccourcis n'ont pas pu être créés : vous pouvez lancer l'application depuis\n" + Installer.InstallDirectory
+            : "Un raccourci « Factures AG » a été créé sur le Bureau et dans le menu Démarrer.";
+        MessageBox.Show(owner,
+            $"Factures AG est installé sur cet ordinateur.\n\n{shortcuts}\n\nVous pouvez supprimer le fichier que vous avez téléchargé. " +
+            "Vos données ne changent pas, et les mises à jour s'installeront toutes seules.",
+            "Installation terminée", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     public static void CleanupPreviousVersion()
