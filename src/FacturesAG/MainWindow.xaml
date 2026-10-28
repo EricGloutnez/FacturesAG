@@ -46,6 +46,14 @@
       </DockPanel>
     </Border>
 
+    <!-- Barre d'état : version de l'application -->
+    <Border DockPanel.Dock="Bottom" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,0" Padding="24,5">
+      <DockPanel>
+        <TextBlock x:Name="StatusData" DockPanel.Dock="Right" Style="{StaticResource Help}" FontSize="12" TextTrimming="CharacterEllipsis"/>
+        <TextBlock x:Name="StatusVersion" Style="{StaticResource Help}" FontSize="12" Margin="0,0,24,0"/>
+      </DockPanel>
+    </Border>
+
     <!-- Message en bas -->
     <Border x:Name="Toast" DockPanel.Dock="Bottom" Visibility="Collapsed" Background="{StaticResource Text}" Padding="16,10">
       <DockPanel>

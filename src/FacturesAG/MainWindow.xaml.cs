@@ -52,6 +52,8 @@ public partial class MainWindow : Window
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
         DataPath.Text = _dataDir;
         VersionText.Text = $"Version {UpdateFlow.CurrentVersion} · mises à jour automatiques et obligatoires";
+        StatusVersion.Text = $"Factures AG · version {UpdateFlow.CurrentVersion}";
+        StatusData.Text = $"Données : {_dataDir}";
         LoadDraft();
 
         // Si l'application reste ouverte longtemps, une nouvelle version est quand même installée,
