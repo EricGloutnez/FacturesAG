@@ -202,8 +202,10 @@ public partial class MainWindow : Window
 
     private void RefreshDraftSummary(Draft draft)
     {
-        var first = draft.Lines.Select(l => Fmt.FromIso(l.Date)).FirstOrDefault(d => d is not null);
-        DraftTitle.Text = draft.IsReopened ? $"Modification de la facture n° {draft.Number}" : Fmt.MonthTitle(first ?? DateTime.Today);
+        // La facture est identifiée par son numéro (celui qu'elle recevra à la finalisation), pas par le mois.
+        DraftTitle.Text = draft.IsReopened
+            ? $"Modification de la facture n° {draft.Number}"
+            : $"Facture n° {_store.GetSettings()["next_number"]}";
         DraftEmpty.Visibility = draft.Lines.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         DraftTotal.Text = Fmt.Money(draft.Total);
         var rate = _store.ListRates().LastOrDefault();
