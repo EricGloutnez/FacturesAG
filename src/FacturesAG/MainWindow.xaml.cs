@@ -210,7 +210,7 @@ public partial class MainWindow : Window
         DraftTotal.Text = Fmt.Money(draft.Total);
         var rate = _store.ListRates().LastOrDefault();
         RateHelp.Text = rate is null ? "Aucun taux défini : ajoutez-en un dans les réglages."
-            : $"Grille : {Fmt.Money(rate.HourlyRate)} par heure commencée · minimum {rate.MinHours:0.#} h · TPS/TVQ non applicables";
+            : $"Grille : {Fmt.Money(rate.HourlyRate)} par heure commencée · minimum {rate.MinHours:0.#} h";
         DraftWarning.Visibility = draft.Incomplete > 0 ? Visibility.Visible : Visibility.Collapsed;
         DraftWarningText.Text = $"{draft.Incomplete} assemblée(s) sans heure de fin : complétez-les pour finaliser.";
     }

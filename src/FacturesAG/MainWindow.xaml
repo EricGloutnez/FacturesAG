@@ -365,10 +365,6 @@
                 </StackPanel>
                 <StackPanel Style="{StaticResource Field}" Width="200"><TextBlock Text="Prochain numéro de facture" Style="{StaticResource FieldLabel}"/><TextBox Tag="next_number"/></StackPanel>
               </WrapPanel>
-              <StackPanel Style="{StaticResource Field}">
-                <TextBlock Text="Modes de paiement acceptés (affiché sur la facture, après le délai)" Style="{StaticResource FieldLabel}"/>
-                <TextBox Tag="payment_terms" TextWrapping="Wrap" AcceptsReturn="True" Height="56" VerticalContentAlignment="Top"/>
-              </StackPanel>
               <StackPanel Style="{StaticResource Field}" Width="320" HorizontalAlignment="Left"><TextBlock Text="Message de bas de page" Style="{StaticResource FieldLabel}"/><TextBox Tag="footer"/></StackPanel>
               <Button Content="Enregistrer" Style="{StaticResource Primary}" HorizontalAlignment="Right" Click="SaveSettings_Click"/>
             </StackPanel>

@@ -81,7 +81,6 @@ public static class InvoicePdf
         var i = inv.Invoice;
         var paid = i.Status == InvoiceStatus.Paid ? i.Total : 0m;
         var draft = i.Status == InvoiceStatus.Draft;
-        var terms = string.Join(" ", new[] { PaymentTermsSentence(i), settings.GetValueOrDefault("payment_terms") }.Where(s => !string.IsNullOrWhiteSpace(s)));
 
         return Document.Create(doc => doc.Page(page =>
         {
@@ -175,9 +174,10 @@ public static class InvoicePdf
                     }
                 });
 
+                // Totaux à droite (sans mention des taxes ni texte de conditions : l'échéance est dans l'en-tête).
                 col.Item().PaddingTop(20).ShowEntire().Row(row =>
                 {
-                    row.RelativeItem().PaddingRight(30).Text(terms).FontSize(9).FontColor("#4A4A46");
+                    row.RelativeItem();
                     row.ConstantItem(230).Column(c =>
                     {
                         void Line(string label, string value, bool muted = false) => c.Item().PaddingVertical(2).Row(r =>
@@ -186,8 +186,6 @@ public static class InvoicePdf
                             if (muted) { left.FontColor(Muted); right.FontColor(Muted); }
                         });
                         Line("Sous-total", Money(i.Total));
-                        Line("TPS", "non applicable", true);
-                        Line("TVQ", "non applicable", true);
                         c.Item().PaddingTop(4).BorderTop(2).PaddingTop(6).Row(r =>
                         {
                             r.RelativeItem().Text("Total facturé").FontSize(12).SemiBold();
