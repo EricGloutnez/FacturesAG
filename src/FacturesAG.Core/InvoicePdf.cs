@@ -200,12 +200,6 @@ public static class InvoicePdf
                     });
                 });
             });
-
-            page.Footer().Row(r =>
-            {
-                r.RelativeItem().Text(settings["footer"]).FontSize(8).FontColor("#8A8A84");
-                r.AutoItem().Text(i.Status == InvoiceStatus.Draft ? "Aperçu : le numéro sera attribué à la finalisation" : $"Facture n° {i.Number}").FontSize(8).FontColor("#8A8A84");
-            });
         }));
     }
 }
