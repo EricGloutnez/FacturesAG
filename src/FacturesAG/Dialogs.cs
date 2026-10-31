@@ -99,4 +99,35 @@ public static class Dialogs
         Buttons(win, body, "Enregistrer", () => date.SelectedDate is not null);
         return win.ShowDialog() == true ? (date.SelectedDate!.Value, (string)method.SelectedItem) : null;
     }
+
+    /// <summary>Courriel de la facture, à relire avant l'envoi : destinataire, objet, message (modifiables).</summary>
+    public static (string To, string Subject, string Body)? SendInvoice(Window owner, string invoiceLabel, string from,
+        string to, string subject, string message, string attachmentName, Action openPdf)
+    {
+        var (win, body) = Frame(owner, $"Envoyer · {invoiceLabel}");
+        var toBox = new TextBox { Text = to, Width = 520 };
+        var subjectBox = new TextBox { Text = subject, Width = 520 };
+        var messageBox = new TextBox { Text = message, Width = 520, Height = 200, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalContentAlignment = VerticalAlignment.Top };
+        body.Children.Add(Field("De", new TextBlock { Text = from }));
+        body.Children.Add(Field("À (plusieurs adresses : séparez-les par « ; »)", toBox));
+        body.Children.Add(Field("Objet", subjectBox));
+        body.Children.Add(Field("Message", messageBox));
+        var attachment = new StackPanel { Orientation = Orientation.Horizontal };
+        attachment.Children.Add(new TextBlock { Text = $"📎 {attachmentName}", VerticalAlignment = VerticalAlignment.Center });
+        var view = new Button { Content = "Voir le PDF", Style = (Style)Application.Current.Resources["Ghost"], Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(10, 4, 10, 4) };
+        view.Click += (_, _) => openPdf();
+        attachment.Children.Add(view);
+        body.Children.Add(Field("Pièce jointe", attachment));
+        var error = new TextBlock { Foreground = (System.Windows.Media.Brush)Application.Current.Resources["Danger"], Margin = new Thickness(0, 0, 0, 8) };
+        body.Children.Add(error);
+        Buttons(win, body, "Envoyer", () =>
+        {
+            if (string.IsNullOrWhiteSpace(toBox.Text)) { error.Text = "Entrez l'adresse courriel du destinataire."; return false; }
+            if (string.IsNullOrWhiteSpace(subjectBox.Text)) { error.Text = "Entrez un objet."; return false; }
+            return true;
+        });
+        win.Loaded += (_, _) => (string.IsNullOrWhiteSpace(to) ? toBox : messageBox).Focus();
+        return win.ShowDialog() == true ? (toBox.Text.Trim(), subjectBox.Text.Trim(), messageBox.Text) : null;
+    }
 }

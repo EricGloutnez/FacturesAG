@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using FacturesAG.Core;
@@ -125,6 +125,10 @@ public sealed class InvoiceRow(InvoiceSummary summary, bool hasPdf)
     public string PdfLabel => hasPdf ? "PDF" : "Créer le PDF";
     public string PaidLabel => IsPaid ? "Annuler le paiement" : "Marquer payée";
     public string ReopenLabel => IsEditing ? "Continuer la modification" : "Rouvrir";
+    public bool CanSend => !IsEditing;
+    public string SendLabel => summary.SentAt is null ? "Envoyer" : "Renvoyer";
+    /// <summary>« envoyée le 31 oct. » (date du dernier envoi par courriel), vide sinon.</summary>
+    public string SentInfo => summary.SentAt is string at && at.Length >= 10 ? $"envoyée le {InvoicePdf.ShortDate(at[..10])}" : "";
 }
 
 public sealed class RateRow(Rate rate)

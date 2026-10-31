@@ -272,15 +272,17 @@
                             <TextBlock Text="{Binding Status}" FontSize="12" FontWeight="SemiBold"/>
                           </Border>
                           <TextBlock Text="{Binding PaidInfo}" Style="{StaticResource Help}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                          <TextBlock Text="{Binding SentInfo}" Style="{StaticResource Help}" Margin="8,0,0,0" VerticalAlignment="Center"/>
                         </StackPanel>
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                   </DataGridTemplateColumn>
-                  <DataGridTemplateColumn Header="" Width="420">
+                  <DataGridTemplateColumn Header="" Width="SizeToCells">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                           <Button Content="{Binding PdfLabel}" Style="{StaticResource Ghost}" Click="InvoicePdf_Click" Tag="{Binding}" Padding="10,4"/>
+                          <Button Content="{Binding SendLabel}" Style="{StaticResource Ghost}" Click="InvoiceSend_Click" Tag="{Binding}" Padding="10,4" IsEnabled="{Binding CanSend}"/>
                           <Button Content="{Binding ReopenLabel}" Style="{StaticResource Ghost}" Click="InvoiceReopen_Click" Tag="{Binding}" Padding="10,4"/>
                           <Button Content="{Binding PaidLabel}" Click="InvoicePaid_Click" Tag="{Binding}" Padding="10,4" Margin="6,0,0,0"/>
                         </StackPanel>
@@ -365,7 +367,35 @@
                 </StackPanel>
                 <StackPanel Style="{StaticResource Field}" Width="200"><TextBlock Text="Prochain numéro de facture" Style="{StaticResource FieldLabel}"/><TextBox Tag="next_number"/></StackPanel>
               </WrapPanel>
+              <TextBlock Text="Envoi par courriel (Gmail)" Style="{StaticResource H2}" Margin="0,12,0,4"/>
+              <TextBlock x:Name="EmailPlaceholdersHelp" Style="{StaticResource Help}" Margin="0,0,0,8" TextWrapping="Wrap"/>
+              <StackPanel Style="{StaticResource Field}" Width="320" HorizontalAlignment="Left">
+                <TextBlock Text="Adresse Gmail d'envoi (vide : votre courriel ci-dessus)" Style="{StaticResource FieldLabel}"/><TextBox Tag="email_from"/>
+              </StackPanel>
+              <StackPanel Style="{StaticResource Field}" Width="660" HorizontalAlignment="Left"><TextBlock Text="Objet" Style="{StaticResource FieldLabel}"/><TextBox Tag="email_subject"/></StackPanel>
+              <StackPanel Style="{StaticResource Field}" Width="660" HorizontalAlignment="Left">
+                <TextBlock Text="Message" Style="{StaticResource FieldLabel}"/>
+                <TextBox Tag="email_body" AcceptsReturn="True" TextWrapping="Wrap" Height="150" VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"/>
+              </StackPanel>
               <Button Content="Enregistrer" Style="{StaticResource Primary}" HorizontalAlignment="Right" Click="SaveSettings_Click"/>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Text="Mot de passe d'application Gmail" Style="{StaticResource H2}"/>
+              <TextBlock Style="{StaticResource Help}" TextWrapping="Wrap" Margin="0,0,0,8"
+                         Text="Ce n'est pas votre mot de passe Gmail habituel : c'est un code de 16 lettres que Google crée pour Factures AG (la validation en deux étapes doit être activée dans votre compte Google). Il est gardé chiffré sur cet ordinateur, lisible seulement par votre session Windows."/>
+              <TextBlock x:Name="GmailPasswordStatus" FontWeight="SemiBold" Margin="0,0,0,8"/>
+              <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                <PasswordBox x:Name="GmailPasswordBox" Width="220" Padding="8,5" VerticalContentAlignment="Center"/>
+                <Button Content="Enregistrer le mot de passe" Style="{StaticResource Primary}" Margin="8,0,0,0" Click="SaveGmailPassword_Click"/>
+                <Button x:Name="DeleteGmailPasswordBtn" Content="Retirer" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="DeleteGmailPassword_Click"/>
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                <Button Content="Créer le code chez Google…" Style="{StaticResource Ghost}" Click="OpenGoogleAppPasswords_Click"/>
+                <Button x:Name="TestMailBtn" Content="M'envoyer un courriel d'essai" Style="{StaticResource Ghost}" Margin="8,0,0,0" Click="TestMail_Click"/>
+              </StackPanel>
             </StackPanel>
           </Border>
 

@@ -1,4 +1,4 @@
-namespace FacturesAG.Core;
+﻿namespace FacturesAG.Core;
 
 public sealed record Rate(long Id, string Category, string EffectiveFrom, decimal HourlyRate, decimal MinHours);
 
@@ -31,7 +31,7 @@ public enum InvoiceStatus { Draft, Final, Paid }
 
 public sealed record InvoiceSummary(
     long Id, int Number, InvoiceStatus Status, string InvoiceDate, string? PaidAt, string? PaymentMethod, decimal Total, string Source,
-    int? PaymentDays = null, bool Editing = false)
+    int? PaymentDays = null, bool Editing = false, string? SentAt = null, string? SentTo = null)
 {
     /// <summary>Date d'échéance (aaaa-mm-jj), ou null si le délai est inconnu (factures importées).</summary>
     public string? DueDate => PaymentDays is int d && DateOnly.TryParse(InvoiceDate, System.Globalization.CultureInfo.InvariantCulture, out var date)

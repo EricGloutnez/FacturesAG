@@ -39,7 +39,24 @@ Dans **Réglages** :
    la facture du mois est mise de côté le temps de la modification, « Annuler les modifications » la remet exactement
    comme avant, et l'ancien PDF est gardé dans `Factures\Versions remplacées\`. Si une facture payée change de total,
    elle repasse « À payer ».
-4. **État des résultats** : revenus de l'année par catégorie, reste à encaisser.
+4. **Envoyer** (onglet Factures, ou juste après la finalisation) : le courriel est préparé (destinataire = courriel du
+   client, objet et message des Réglages), vous le relisez et le modifiez au besoin, puis il part de votre compte Gmail
+   avec le PDF en pièce jointe. La facture affiche « envoyée le … » ; le courriel est aussi dans « Envoyés » de Gmail.
+5. **État des résultats** : revenus de l'année par catégorie, reste à encaisser.
+
+## Envoi par courriel (Gmail)
+
+1. Dans votre compte Google, activez la validation en deux étapes, puis créez un **mot de passe d'application**
+   (Réglages → bouton « Créer le code chez Google… », ou https://myaccount.google.com/apppasswords). Google affiche
+   un code de 16 lettres : ce n'est pas votre mot de passe Gmail habituel.
+2. Dans Factures AG, Réglages : entrez l'adresse Gmail d'envoi (vide = votre « Courriel »), le courriel du client,
+   et collez le code dans « Mot de passe d'application Gmail ». « M'envoyer un courriel d'essai » vérifie le tout.
+
+Le code est chiffré par Windows (DPAPI, lisible seulement par votre session) dans
+`%LOCALAPPDATA%\Factures AG\gmail-mot-de-passe.dat`, jamais dans la base de données. Pour le révoquer : bouton
+« Retirer », ou supprimez-le dans votre compte Google. Dans l'objet et le message, `{numéro}`, `{date}`, `{montant}`,
+`{échéance}`, `{nom}` et `{client}` sont remplacés par les valeurs de la facture. Essais : `FACTURES_AG_SMTP=hôte:port`
+envoie à un serveur local au lieu de Gmail.
 
 ## Règle de calcul (assemblée virtuelle)
 

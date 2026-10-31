@@ -353,8 +353,16 @@ public partial class MainWindow : Window
         // La facture est enregistrée : l'écran est rafraîchi même si le PDF échoue ensuite.
         LoadDraft();
         var number = _store.GetInvoice(id).Invoice.Number;
-        if (TryWritePdf(_store.GetInvoice(id), keepPrevious: false, out var file)
-            && Confirm($"Facture n° {number} finalisée.\nLe PDF est enregistré dans :\n{file}\n\nL'ouvrir maintenant ?")) OpenFile(file);
+        if (!TryWritePdf(_store.GetInvoice(id), keepPrevious: false, out var file)) return;
+        // Envoi par courriel déjà réglé : on propose d'envoyer la facture tout de suite (le courriel est montré avant l'envoi).
+        if (GmailPassword.Exists)
+        {
+            var answer = MessageBox.Show(this, $"Facture n° {number} finalisée.\nLe PDF est enregistré dans :\n{file}\n\nL'envoyer maintenant par courriel ?\n(Oui : vous relirez le courriel avant l'envoi.  Non : ouvrir le PDF.)",
+                "Factures AG", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+            if (answer == MessageBoxResult.Yes) _ = SendInvoiceAsync(id);
+            else if (answer == MessageBoxResult.No) OpenFile(file);
+        }
+        else if (Confirm($"Facture n° {number} finalisée.\nLe PDF est enregistré dans :\n{file}\n\nL'ouvrir maintenant ?")) OpenFile(file);
     }
 
     /// <summary>Crée le PDF ; en cas d'échec, explique que la facture est bien enregistrée et comment recréer le PDF.</summary>
@@ -504,6 +512,129 @@ public partial class MainWindow : Window
         catch (Exception ex) { Error(ex); }
     }
 
+    // ---------- Envoi par courriel (Gmail) ----------
+    private void InvoiceSend_Click(object sender, RoutedEventArgs e)
+    {
+        if (((Button)sender).Tag is InvoiceRow row) _ = SendInvoiceAsync(row.Summary.Id);
+    }
+
+    private string SenderAddress(IReadOnlyDictionary<string, string> s) =>
+        s.GetValueOrDefault("email_from", "") is { Length: > 0 } from ? from.Trim() : s.GetValueOrDefault("issuer_email", "").Trim();
+
+    /// <summary>Vrai si l'envoi est prêt (adresse d'envoi et mot de passe d'application) ; sinon explique quoi régler.</summary>
+    private bool MailReady(IReadOnlyDictionary<string, string> s, out string password)
+    {
+        password = GmailPassword.Read() ?? "";
+        var missing = SenderAddress(s).Length == 0 ? "votre adresse Gmail d'envoi" : password.Length == 0 ? "le mot de passe d'application Gmail" : null;
+        if (missing is null) return true;
+        if (Confirm($"Pour envoyer les factures par courriel, entrez d'abord {missing} dans les Réglages.\n\nOuvrir les Réglages ?")) TabSettings.IsSelected = true;
+        return false;
+    }
+
+    private bool _sending;
+
+    /// <summary>Prépare le courriel de la facture, le montre pour relecture, puis l'envoie avec le PDF joint.</summary>
+    private async Task SendInvoiceAsync(long id)
+    {
+        if (_sending) return;
+        try
+        {
+            var inv = _store.GetInvoice(id);
+            var n = inv.Invoice.Number;
+            if (inv.Invoice.Editing) { Error(new UserException($"La facture n° {n} est en cours de modification : enregistrez ou annulez d'abord la modification.")); return; }
+            var s = _store.GetSettings();
+            if (!MailReady(s, out var password)) return;
+            var from = SenderAddress(s);
+            var subjectTemplate = s.GetValueOrDefault("email_subject", "") is { Length: > 0 } st ? st : InvoiceMail.DefaultSubject;
+            var bodyTemplate = s.GetValueOrDefault("email_body", "") is { Length: > 0 } bt ? bt : InvoiceMail.DefaultBody;
+            (string To, string Subject, string Body) mail = (s.GetValueOrDefault("client_email", ""),
+                InvoiceMail.Fill(subjectTemplate, inv, s), InvoiceMail.Fill(bodyTemplate, inv, s));
+            var attachmentName = Path.GetFileName(PdfPath(inv));
+            while (true)
+            {
+                // Relecture : en cas d'échec, la fenêtre revient avec le texte déjà saisi.
+                if (Dialogs.SendInvoice(this, $"facture n° {n}", from, mail.To, mail.Subject, mail.Body, attachmentName,
+                        () => { try { OpenFile(WritePdf(_store.GetInvoice(id))); } catch (Exception ex) { Error(ex); } }) is not { } edited) return;
+                mail = edited;
+                _sending = true;
+                Mouse.OverrideCursor = Cursors.Wait;
+                IsEnabled = false;
+                try
+                {
+                    // Le PDF joint est toujours celui de la facture telle qu'elle est enregistrée.
+                    var pdf = InvoicePdf.Generate(_store.GetInvoice(id), _store.GetSettings());
+                    await InvoiceMail.SendAsync(MailServer.Current, from, s.GetValueOrDefault("issuer_name", ""), password,
+                        mail.To, mail.Subject, mail.Body, attachmentName, pdf);
+                }
+                catch (Exception ex) { Error(ex); continue; }
+                finally { _sending = false; Mouse.OverrideCursor = null; IsEnabled = true; }
+
+                _store.MarkSent(id, DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture), mail.To);
+                try { WritePdf(_store.GetInvoice(id)); } catch (Exception) { } // garder le PDF du dossier identique à celui envoyé
+                LoadInvoices();
+                Notify($"Facture n° {n} envoyée à {mail.To}. Elle se trouve aussi dans « Envoyés » de Gmail.");
+                return;
+            }
+        }
+        catch (Exception ex) { Error(ex); }
+    }
+
+    private void ShowGmailPassword()
+    {
+        var saved = GmailPassword.Exists;
+        GmailPasswordStatus.Text = saved ? "✓ Mot de passe enregistré sur cet ordinateur." : "Aucun mot de passe enregistré : l'envoi par courriel n'est pas encore possible.";
+        GmailPasswordStatus.Foreground = (System.Windows.Media.Brush)FindResource(saved ? "Ok" : "Muted");
+        DeleteGmailPasswordBtn.Visibility = saved ? Visibility.Visible : Visibility.Collapsed;
+        GmailPasswordBox.Clear();
+        EmailPlaceholdersHelp.Text = "Les factures partent de votre compte Gmail vers le « Courriel » du client (modifiable avant chaque envoi). " +
+                                     $"Dans l'objet et le message, ces mots sont remplacés par ceux de la facture : {InvoiceMail.Placeholders}";
+    }
+
+    private void SaveGmailPassword_Click(object sender, RoutedEventArgs e)
+    {
+        var password = InvoiceMail.NormalizeAppPassword(GmailPasswordBox.Password);
+        if (password.Length != 16 || !password.All(char.IsAsciiLetter))
+        {
+            Error(new UserException("Le mot de passe d'application Google compte 16 lettres (affichées en 4 groupes de 4). Copiez-le tel quel depuis la page de Google."));
+            return;
+        }
+        try { GmailPassword.Save(password); Notify("Mot de passe d'application enregistré."); }
+        catch (Exception ex) { Error(ex); }
+        ShowGmailPassword();
+    }
+
+    private void DeleteGmailPassword_Click(object sender, RoutedEventArgs e)
+    {
+        if (!Confirm("Retirer le mot de passe d'application de cet ordinateur ?\n\nL'envoi par courriel ne sera plus possible tant qu'un nouveau ne sera pas entré.")) return;
+        try { GmailPassword.Delete(); } catch (Exception ex) { Error(ex); }
+        ShowGmailPassword();
+    }
+
+    private void OpenGoogleAppPasswords_Click(object sender, RoutedEventArgs e) => OpenFile("https://myaccount.google.com/apppasswords");
+
+    /// <summary>Courriel d'essai à soi-même, sans pièce jointe de facture : vérifie l'adresse et le mot de passe.</summary>
+    private async void TestMail_Click(object sender, RoutedEventArgs e)
+    {
+        if (_sending || !SaveSettingsIfNeeded()) return;
+        var s = _store.GetSettings();
+        if (!MailReady(s, out var password)) return;
+        var from = SenderAddress(s);
+        _sending = true;
+        Mouse.OverrideCursor = Cursors.Wait;
+        IsEnabled = false;
+        try
+        {
+            await InvoiceMail.SendAsync(MailServer.Current, from, s.GetValueOrDefault("issuer_name", ""), password, from,
+                "Factures AG · courriel d'essai", "Ce courriel confirme que Factures AG peut envoyer vos factures depuis votre compte Gmail.\n\n" +
+                "Pièce jointe : aperçu de la facture en cours (pas encore finalisée).",
+                "Apercu-facture-en-cours.pdf", InvoicePdf.Generate(_store.DraftAsInvoice(), s));
+            MessageBox.Show(this, $"Courriel d'essai envoyé à {from}.\n\nVérifiez votre boîte de réception : l'envoi des factures est prêt.", "Factures AG",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex) { Error(ex); }
+        finally { _sending = false; Mouse.OverrideCursor = null; IsEnabled = true; }
+    }
+
     private void OpenPdfFolder_Click(object sender, RoutedEventArgs e) => OpenFile(_pdfDir);
     private void OpenDataFolder_Click(object sender, RoutedEventArgs e) => OpenFile(_dataDir);
 
@@ -625,6 +756,7 @@ public partial class MainWindow : Window
         ["issuer_street"] = "Votre adresse", ["issuer_city"] = "Votre ville", ["client_name"] = "Nom du client",
         ["client_email"] = "Courriel du client", ["client_street"] = "Adresse du client", ["client_city"] = "Ville du client",
         ["payment_terms"] = "Modes de paiement", ["footer"] = "Message de bas de page", ["next_number"] = "Prochain numéro",
+        ["email_from"] = "Adresse Gmail d'envoi", ["email_subject"] = "Objet du courriel", ["email_body"] = "Message du courriel",
     };
 
     /// <summary>Valeurs affichées au chargement des Réglages ; null quand le formulaire n'est pas chargé.</summary>
@@ -647,6 +779,7 @@ public partial class MainWindow : Window
         SettingsPaymentDays.SelectedValue = int.Parse(s["payment_days"], CultureInfo.InvariantCulture);
         RefreshRates();
         ShowDataLocation();
+        ShowGmailPassword();
         _settingsSnapshot = SettingsFormValues();
     }
 

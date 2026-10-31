@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
@@ -29,6 +29,10 @@ public sealed class Store : IDisposable
         ["payment_days"] = "15",
         ["footer"] = "Merci de votre confiance.",
         ["next_number"] = "1",
+        // Envoi par courriel (Gmail) : adresse d'envoi (vide = « Courriel » des coordonnées), objet et message.
+        ["email_from"] = "",
+        ["email_subject"] = InvoiceMail.DefaultSubject,
+        ["email_body"] = InvoiceMail.DefaultBody,
     };
 
     public const string DefaultPaymentTerms = "Paiement par virement Interac, par chèque ou comptant.";
@@ -68,6 +72,11 @@ public sealed class Store : IDisposable
             UPDATE settings SET value = 'Paiement par virement Interac, par chèque ou comptant.'
               WHERE key = 'payment_terms'
                 AND value = 'Solde payable sur réception par virement Interac, par chèque ou comptant. Net 15 jours suivant la date de facture.';
+            """),
+        // 0.5.0 : date et destinataire du dernier envoi par courriel.
+        new(3, """
+            ALTER TABLE invoices ADD COLUMN sent_at TEXT;
+            ALTER TABLE invoices ADD COLUMN sent_to TEXT;
             """),
     ];
 
@@ -535,7 +544,7 @@ public sealed class Store : IDisposable
         (long)r["id"], (int)(long)r["number"],
         (string)r["status"] == "paid" ? InvoiceStatus.Paid : InvoiceStatus.Final,
         Str(r, "invoice_date") ?? "", Str(r, "paid_at"), Str(r, "payment_method"), FromCents(Long(r, "total_cents") ?? 0), (string)r["source"],
-        Long(r, "payment_days") is long d ? (int)d : null, (long)r["editing"] != 0);
+        Long(r, "payment_days") is long d ? (int)d : null, (long)r["editing"] != 0, Str(r, "sent_at"), Str(r, "sent_to"));
 
     public List<InvoiceSummary> ListInvoices() =>
         Query("SELECT * FROM invoices WHERE status != 'draft' ORDER BY number DESC", ReadSummary);
@@ -562,6 +571,13 @@ public sealed class Store : IDisposable
     {
         if (!IsIsoDate(paidAt)) throw new UserException("Date de paiement invalide.");
         if (Exec("UPDATE invoices SET status = 'paid', paid_at = $1, payment_method = $2 WHERE id = $3 AND status != 'draft'", paidAt, paymentMethod ?? "", id) == 0)
+            throw new UserException("Facture introuvable.");
+    }
+
+    /// <summary>Note l'envoi par courriel (date et heure locales « aaaa-mm-jj hh:mm », destinataires).</summary>
+    public void MarkSent(long id, string sentAt, string sentTo)
+    {
+        if (Exec("UPDATE invoices SET sent_at = $1, sent_to = $2 WHERE id = $3 AND status != 'draft'", sentAt, sentTo, id) == 0)
             throw new UserException("Facture introuvable.");
     }
 

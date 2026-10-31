@@ -552,7 +552,7 @@ var tests = new List<(string Name, Action Body)>
         using var s = new Store(":memory:");
         Eq(Store.Migrations.Max(m => m.Version), s.SchemaVersion);
     }),
-    ("base de la version 0.1.0 (sans numéro) : passage à la structure 2 avec sauvegarde, données intactes", () =>
+    ("base de la version 0.1.0 (sans numéro) : passage à la dernière structure avec sauvegarde, données intactes", () =>
     {
         var dir = Directory.CreateTempSubdirectory("fag-test-");
         try
@@ -562,7 +562,7 @@ var tests = new List<(string Name, Action Body)>
             var backups = Path.Combine(dir.FullName, "Sauvegardes");
             using (var s = new Store(file, backups))
             {
-                Eq(2, s.SchemaVersion);
+                Eq(Store.Migrations.Max(m => m.Version), s.SchemaVersion);
                 Eq(1, s.ListInvoices().Count);
                 Eq(90m, s.ListInvoices()[0].Total);
                 Eq<int?>(15, s.ListInvoices()[0].PaymentDays);              // anciennes factures : Net 15
@@ -571,7 +571,7 @@ var tests = new List<(string Name, Action Body)>
             }
             var saved = Directory.GetFiles(backups);
             Eq(1, saved.Length);
-            True(saved[0].EndsWith("-avant-structure-2.db"), "nom de la sauvegarde");
+            True(saved[0].EndsWith($"-avant-structure-{Store.Migrations.Max(m => m.Version)}.db"), "nom de la sauvegarde");
             // Une seconde ouverture ne refait ni migration ni sauvegarde.
             using (new Store(file, backups)) { }
             Eq(1, Directory.GetFiles(backups).Length);
@@ -659,6 +659,55 @@ var tests = new List<(string Name, Action Body)>
             False(File.Exists(current + ".old"));
         }
         finally { dir.Delete(true); }
+    }),
+    ("courriel : objet et message remplis avec la facture", () =>
+    {
+        var inv = new InvoiceDetail(new InvoiceSummary(1, 120, InvoiceStatus.Final, "2026-10-31", null, null, 2668.14m, "app", 15), []);
+        var settings = new Dictionary<string, string> { ["issuer_name"] = "Prénom Test", ["client_name"] = "Client Test" };
+        Eq("Facture n° 120", InvoiceMail.Fill(InvoiceMail.DefaultSubject, inv, settings));
+        var body = InvoiceMail.Fill(InvoiceMail.DefaultBody, inv, settings);
+        True(body.Contains("facture n° 120 du 31 octobre 2026"), "numéro et date");
+        True(body.Contains(InvoicePdf.Money(2668.14m)), "montant");
+        True(body.Contains("au plus tard le 15 novembre 2026"), "échéance");
+        True(body.TrimEnd().EndsWith("Prénom Test"), "signature");
+        var net0 = inv with { Invoice = inv.Invoice with { PaymentDays = 0 } };
+        True(InvoiceMail.Fill("{échéance}", net0, settings) == "sur réception", "Net 0");
+        Eq("Client Test", InvoiceMail.Fill("{client}", inv, settings));
+    }),
+    ("courriel : adresses vérifiées, mot de passe d'application sans espaces", () =>
+    {
+        Eq("abcdefghijklmnop", InvoiceMail.NormalizeAppPassword(" abcd efgh ijkl mnop "));
+        Eq(2, InvoiceMail.ParseRecipients("a@example.com; b@example.com").Count);
+        Throws<UserException>(() => InvoiceMail.ParseRecipients(""), "destinataire");
+        Throws<UserException>(() => InvoiceMail.ParseRecipients("pas une adresse"), "pas une adresse");
+    }),
+    ("courriel : envoi avec le PDF joint (faux serveur local)", () =>
+    {
+        using var server = new FakeSmtp(acceptPassword: "abcdefghijklmnop");
+        var pdf = new byte[] { 0x25, 0x50, 0x44, 0x46, 1, 2, 3 };
+        InvoiceMail.SendAsync(server.Server, "moi@example.com", "Prénom Test", "abcd efgh ijkl mnop", "client@example.com",
+            "Facture n° 120", "Bonjour,\nVoici la facture.", "Facture-120_Client.pdf", pdf).GetAwaiter().GetResult();
+        True(server.Data.Contains("Facture-120_Client.pdf"), "pièce jointe");
+        True(server.Data.Contains(Convert.ToBase64String(pdf)), "contenu du PDF");
+        True(server.Recipients.Contains("<client@example.com>"), "destinataire");
+        True(server.LoggedIn, "connexion avec le mot de passe");
+    }),
+    ("courriel : mot de passe refusé par le serveur = message clair", () =>
+    {
+        using var server = new FakeSmtp(acceptPassword: "autre");
+        Throws<UserException>(() => InvoiceMail.SendAsync(server.Server, "moi@example.com", "", "mauvais", "client@example.com",
+            "Objet", "Message", "f.pdf", [1]).GetAwaiter().GetResult(), "mot de passe d'application");
+    }),
+    ("date d'envoi gardée avec la facture", () =>
+    {
+        using var s = Fresh();
+        s.AddFreeLine("Formation", "Formation", 100m, "2026-10-01");
+        var id = s.Finalize("2026-10-31");
+        Eq<string?>(null, s.GetInvoice(id).Invoice.SentAt);
+        s.MarkSent(id, "2026-10-31 14:05", "client@example.com");
+        Eq<string?>("2026-10-31 14:05", s.GetInvoice(id).Invoice.SentAt);
+        Eq<string?>("client@example.com", s.GetInvoice(id).Invoice.SentTo);
+        Eq(InvoiceMail.DefaultSubject, s.GetSettings()["email_subject"]);
     }),
 };
 
@@ -773,4 +822,62 @@ static class Sample
             { "montant": "60.00", "total": "60.00", "categorie": "Formation", "description": "Formation" } ] }
         } } }
         """;
+}
+
+// Faux serveur SMTP local : reçoit le courriel sans rien envoyer à l'extérieur.
+sealed class FakeSmtp : IDisposable
+{
+    private readonly System.Net.Sockets.TcpListener _listener = new(System.Net.IPAddress.Loopback, 0);
+    private readonly Task _task;
+    public string Data = "";
+    public List<string> Recipients = [];
+    public bool LoggedIn;
+    public MailServer Server => new("127.0.0.1", ((System.Net.IPEndPoint)_listener.LocalEndpoint).Port, false);
+
+    public FakeSmtp(string acceptPassword)
+    {
+        _listener.Start();
+        _task = Task.Run(async () =>
+        {
+            using var client = await _listener.AcceptTcpClientAsync();
+            using var stream = client.GetStream();
+            using var reader = new StreamReader(stream);
+            using var writer = new StreamWriter(stream) { AutoFlush = true, NewLine = "\r\n" };
+            await writer.WriteLineAsync("220 faux serveur");
+            while (await reader.ReadLineAsync() is string line)
+            {
+                var cmd = line.ToUpperInvariant();
+                if (cmd.StartsWith("EHLO")) { await writer.WriteLineAsync("250-localhost"); await writer.WriteLineAsync("250 AUTH LOGIN"); }
+                else if (cmd.StartsWith("AUTH LOGIN"))
+                {
+                    // Le nom d'utilisateur peut suivre directement « AUTH LOGIN ».
+                    if (line.Trim().Length == "AUTH LOGIN".Length)
+                    {
+                        await writer.WriteLineAsync("334 VXNlcm5hbWU6");
+                        await reader.ReadLineAsync();
+                    }
+                    await writer.WriteLineAsync("334 UGFzc3dvcmQ6");
+                    var pw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(await reader.ReadLineAsync() ?? ""));
+                    LoggedIn = pw == acceptPassword;
+                    await writer.WriteLineAsync(LoggedIn ? "235 ok" : "535 5.7.8 Username and Password not accepted");
+                }
+                else if (cmd.StartsWith("MAIL") && !LoggedIn) await writer.WriteLineAsync("530 5.7.0 Authentication Required");
+                else if (cmd.StartsWith("RCPT")) { Recipients.Add(line[(line.IndexOf(':') + 1)..].Trim()); await writer.WriteLineAsync("250 ok"); }
+                else if (cmd.StartsWith("DATA"))
+                {
+                    await writer.WriteLineAsync("354 go");
+                    var sb = new System.Text.StringBuilder();
+                    while (await reader.ReadLineAsync() is string d && d != ".") sb.AppendLine(d);
+                    Data = sb.ToString().Replace("\r\n", "\n");
+                    // Le base64 est coupé en lignes : on le recolle pour pouvoir le chercher.
+                    Data += "\n" + Data.Replace("\n", "");
+                    await writer.WriteLineAsync("250 reçu");
+                }
+                else if (cmd.StartsWith("QUIT")) { await writer.WriteLineAsync("221 bye"); break; }
+                else await writer.WriteLineAsync("250 ok");
+            }
+        });
+    }
+
+    public void Dispose() { _listener.Stop(); try { _task.Wait(2000); } catch (AggregateException) { } }
 }
