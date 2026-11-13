@@ -303,7 +303,9 @@ public partial class MainWindow : Window
             Error(new UserException("Aucune assemblée reconnue. Copiez toute la page « Mes invitations » (Ctrl+A puis Ctrl+C) et collez-la ici."));
             return;
         }
-        PasteList.ItemsSource = items.Select(it => new PasteRow(it, _store.IsKnown(it.Entity, it.Date))).ToList();
+        // Début facturé : 30 minutes avant l'heure annoncée sur ag-connect (temps de connexion).
+        PasteList.ItemsSource = items.Select(site => (Site: site, Billed: AgConnectParser.WithConnectionLead(site)))
+            .Select(x => new PasteRow(x.Billed, _store.IsKnown(x.Billed.Entity, x.Billed.Date), x.Site.Start)).ToList();
         PasteAddBtn.Visibility = Visibility.Visible;
     }
 

@@ -87,9 +87,10 @@ public sealed class LineRow : Observable
 
 public sealed class PasteRow : Observable
 {
-    public PasteRow(AgConnectItem item, bool known)
+    public PasteRow(AgConnectItem item, bool known, string siteStart)
     {
         Item = item;
+        SiteStart = siteStart;
         Reason = known ? "déjà ajoutée" : !item.Virtual ? "avec adresse (hybride) : pas encore géré" : "";
         Selected = Reason.Length == 0;
     }
@@ -99,7 +100,8 @@ public sealed class PasteRow : Observable
     public bool CanAdd => Reason.Length == 0;
     public bool Selected { get; set; }
     public string Title => Item.Entity;
-    public string When => $"{InvoicePdf.LongDate(Item.Date)} à {Item.Start}";
+    public string SiteStart { get; }
+    public string When => $"{InvoicePdf.LongDate(Item.Date)} · début {Item.Start} ({SiteStart} sur ag-connect)";
 }
 
 public sealed class InvoiceRow(InvoiceSummary summary, bool hasPdf)

@@ -55,4 +55,23 @@ public static partial class AgConnectParser
         }
         return result;
     }
+
+    /// <summary>Connexion à l'assemblée : le début facturé est 30 minutes avant l'heure annoncée sur ag-connect.</summary>
+    public const int ConnectionLeadMinutes = 30;
+
+    /// <summary>
+    /// L'assemblée avec son début facturé (<see cref="ConnectionLeadMinutes"/> avant l'heure du site),
+    /// la veille si cela passe avant minuit.
+    /// </summary>
+    public static AgConnectItem WithConnectionLead(AgConnectItem item)
+    {
+        if (!DateTime.TryParseExact($"{item.Date} {item.Start}", "yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var at)) return item;
+        var start = at.AddMinutes(-ConnectionLeadMinutes);
+        return item with
+        {
+            Date = start.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+            Start = start.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture),
+        };
+    }
 }

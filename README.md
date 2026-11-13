@@ -29,6 +29,8 @@ Dans **Réglages** :
 ## Utilisation
 
 1. **Facture en cours** : « Coller depuis ag-connect » (page *Mes invitations*, Ctrl+A puis Ctrl+C), ou « + Assemblée ».
+   Le début facturé d'une assemblée collée est **30 minutes avant** l'heure affichée sur ag-connect (temps de connexion) ;
+   il reste modifiable dans la ligne.
    Saisissez l'heure de fin (`20:34`, `20h34` ou `2034`) ; le montant se calcule seul. Décochez *Quorum* si le quorum
    n'est pas atteint (minimum facturé). Tapez un montant pour le forcer, effacez-le pour revenir au calcul.
    « + Ligne libre » ajoute une ligne à montant fixe (formation, per diem, kilométrage…).

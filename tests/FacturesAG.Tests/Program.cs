@@ -19,6 +19,18 @@ Store Fresh()
 
 var tests = new List<(string Name, Action Body)>
 {
+    ("ag-connect : début facturé 30 minutes avant l'heure du site (connexion)", () =>
+    {
+        var it = new AgConnectItem("SDC A", "2026-09-29", "18:30", "", true, "");
+        Eq(it with { Start = "18:00" }, AgConnectParser.WithConnectionLead(it));
+        Eq(it with { Start = "08:45" }, AgConnectParser.WithConnectionLead(it with { Start = "09:15" }));
+        // Avant minuit : la veille.
+        Eq(it with { Date = "2026-09-28", Start = "23:50" }, AgConnectParser.WithConnectionLead(it with { Start = "00:20" }));
+        using var s = Fresh();
+        var item = AgConnectParser.WithConnectionLead(AgConnectParser.Parse(Sample.Invitations).First(i => i.Virtual));
+        s.AddFromAgConnect([item]);
+        Eq(item.Start, s.GetDraft().Lines[0].Start);
+    }),
     ("durée simple et passage de minuit", () =>
     {
         Eq(124, Billing.DurationMinutes("18:30", "20:34"));
